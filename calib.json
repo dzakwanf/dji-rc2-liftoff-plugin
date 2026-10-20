@@ -1,0 +1,50 @@
+{
+  "device": "DJI RC 2 (rc331)",
+  "vid": 11427,
+  "pid": 4129,
+  "interface": 0,
+  "ep_out": 1,
+  "ep_in": 129,
+  "cmd_set": 6,
+  "cmd_id": 245,
+  "src": 6,
+  "payload_len": 13,
+  "axes": {
+    "aileron": {
+      "offset": 1,
+      "min": 373,
+      "center": 1648,
+      "max": 2955
+    },
+    "elevator": {
+      "offset": 3,
+      "min": 427,
+      "center": 1719,
+      "max": 2962
+    },
+    "throttle": {
+      "offset": 5,
+      "min": 423,
+      "center": 1691,
+      "max": 2910
+    },
+    "rudder": {
+      "offset": 7,
+      "min": 386,
+      "center": 1635,
+      "max": 2910
+    },
+    "wheel_left": {
+      "offset": 9,
+      "min": 1734,
+      "center": 1735,
+      "max": 1737
+    },
+    "wheel_right": {
+      "offset": 11,
+      "min": 1754,
+      "center": 1757,
+      "max": 1761
+    }
+  }
+}
