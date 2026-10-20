@@ -169,13 +169,18 @@ def split_packets(buf: bytes):
 
 
 def scale_axis(raw: int, lo: int, ctr: int, hi: int, deadzone: float = 0.025) -> float:
-    """Bipolar scaling for self-centering sticks: center -> 0.0."""
+    """Bipolar scaling for self-centering sticks: center -> 0.0.
+
+    "hi" is the end the channel counts towards as the stick moves one way and
+    "lo" is the other. A channel that reports backwards arrives with the two
+    swapped, which flips the sign of the result, so the direction comes from
+    the calibration rather than being guessed."""
     if raw >= ctr:
-        span = max(1, hi - ctr)
-        frac = (raw - ctr) / span
+        span = hi - ctr
+        frac = (raw - ctr) / span if span != 0 else 0.0
     else:
-        span = max(1, ctr - lo)
-        frac = (raw - ctr) / span
+        span = ctr - lo
+        frac = (raw - ctr) / span if span != 0 else 0.0
     a = abs(frac)
     if a <= deadzone:
         return 0.0
@@ -188,11 +193,19 @@ def scale_axis_unipolar(raw: int, lo: int, ctr: int, hi: int) -> float:
     """Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
     has (the stick springs back to the middle when released).
 
-    The released/centered position is treated as throttle 0, and pushing up
-    raises it to 1. Pulling down stays at 0 instead of going negative, since
-    Liftoff has no use for negative throttle."""
+    Released = 0, pushed up = 1. Pulling the stick down past the released point
+    stays at 0 instead of going negative, since Liftoff has no use for negative
+    throttle.
+
+    The calibration carries the direction: "hi" is wherever the channel counts
+    towards as the stick goes up. If the controller reports the channel
+    backwards, the recorded min and max arrive swapped, so "hi" ends up smaller
+    than "ctr" and the division below still produces the right sign. That is why
+    the ends are swapped in the config rather than the result being negated:
+    negating a value already clamped at 0 would make the whole lower half of the
+    stick read as full throttle."""
     span = hi - ctr
-    if span <= 0:
+    if span == 0:
         return 0.0
     frac = (raw - ctr) / span
     return max(0.0, min(1.0, frac))
@@ -242,8 +255,11 @@ def load_calib():
                 mn = int(axes[name]["min"])
                 ct = int(axes[name]["center"])
                 mx = int(axes[name]["max"])
-                # Ignore narrow/inconsistent ranges; keep the fallback instead.
-                if mn < ct < mx and (mx - mn) >= MIN_USABLE_SPAN:
+                # Ignore narrow ranges; keep the fallback instead. Either
+                # direction is accepted: a backwards channel reports min and max
+                # swapped, and the scalers read direction from those values.
+                lo_end, hi_end = min(mn, mx), max(mn, mx)
+                if lo_end < ct < hi_end and (hi_end - lo_end) >= MIN_USABLE_SPAN:
                     cal_min[i], cal_ctr[i], cal_max[i] = mn, ct, mx
         except Exception:
             pass
@@ -260,13 +276,45 @@ DEFAULT_MAPPING = {
 }
 
 
+def load_mapping():
+    """Read the mapping block so the monitor applies the same direction fixes as
+    the plugin. Without this, a role flipped by "invert" would look correct in
+    the plugin but backwards on screen (or the other way round), which is
+    confusing when trying to work out which way a stick should point."""
+    mapping = {k: dict(v) for k, v in DEFAULT_MAPPING.items()}
+    if os.path.exists(CALIB_FILE_PATH):
+        try:
+            with open(CALIB_FILE_PATH) as f:
+                existing = json.load(f).get("mapping")
+            if isinstance(existing, dict):
+                for key, val in existing.items():
+                    if key in mapping and isinstance(val, dict):
+                        mapping[key].update(val)
+        except Exception:
+            pass
+    return mapping
+
+
+def apply_mapping(role_values, mapping):
+    """Flip roles the mapping marks as inverted. Bipolar values negate; a
+    unipolar value has no negative side, so it is reflected within 0..1."""
+    out = []
+    for name, v in role_values:
+        entry = mapping.get(name, {})
+        if entry.get("invert"):
+            v = -v if entry.get("center", True) else (1.0 - v)
+        out.append(v)
+    return out
+
+
 def save_calib(dev_info, cal_min, cal_ctr, cal_max):
     # Guard against ranges measured while the channel never actually moved.
     # A span of a few LSB is pure noise and would make the axis jump wildly.
     rejected = []
     for i, name in enumerate(AXIS_NAMES):
-        span = cal_max[i] - cal_min[i]
-        if span < MIN_USABLE_SPAN or not (cal_min[i] < cal_ctr[i] < cal_max[i]):
+        lo_end, hi_end = min(cal_min[i], cal_max[i]), max(cal_min[i], cal_max[i])
+        span = hi_end - lo_end
+        if span < MIN_USABLE_SPAN or not (lo_end < cal_ctr[i] < hi_end):
             rejected.append((name, span))
             cal_min[i] = DEFAULT_CAL[0][i]
             cal_ctr[i] = DEFAULT_CAL[1][i]
@@ -592,6 +640,7 @@ def main():
                     except Exception:
                         break
                 cal_min, cal_ctr, cal_max = load_calib()
+                mapping = load_mapping()
                 seq = (seq + 1) & 0xFFFF
                 dev.write(info["ep_out"], build_duml(10, 6, seq, 0x40, 0x06, 0x38), timeout=50)
                 try:
@@ -635,6 +684,11 @@ def main():
                     rud = scale_axis(raw[3], cal_min[3], cal_ctr[3], cal_max[3], 0.025)
                     wl  = scale_axis(raw[4], cal_min[4], cal_ctr[4], cal_max[4], 0.030)
                     wr  = scale_axis(raw[5], cal_min[5], cal_ctr[5], cal_max[5], 0.030)
+                    # Apply the same direction overrides the plugin uses.
+                    ail, ele, thr, rud, wl, wr = apply_mapping(
+                        [("roll", ail), ("pitch", ele), ("throttle", thr),
+                         ("yaw", rud), ("aux_left", wl), ("aux_right", wr)],
+                        mapping)
 
                     packed = struct.pack(
                         STATE_STRUCT_FMT,

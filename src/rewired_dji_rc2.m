@@ -137,15 +137,20 @@ static double now_sec(void) {
 }
 
 /* Bipolar scaling for self-centering sticks (roll, pitch, yaw).
-   Center maps to 0.0, with a deadzone around it. */
+   Center maps to 0.0, with a deadzone around it.
+
+   "hi" is the end the channel counts towards as the stick goes one way and
+   "lo" is the other. A channel that reports backwards arrives with the two
+   swapped, which flips the sign of the result below, so the direction comes
+   from the calibration instead of being guessed. */
 static float scale_axis(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi, float deadzone) {
     float frac = 0.0f;
     if (raw >= ctr) {
         int span = (int)hi - (int)ctr;
-        frac = (span > 0) ? ((float)((int)raw - (int)ctr) / (float)span) : 0.0f;
+        if (span != 0) frac = (float)((int)raw - (int)ctr) / (float)span;
     } else {
         int span = (int)ctr - (int)lo;
-        frac = (span > 0) ? ((float)((int)raw - (int)ctr) / (float)span) : 0.0f;
+        if (span != 0) frac = (float)((int)raw - (int)ctr) / (float)span;
     }
     float a = fabsf(frac);
     if (a <= deadzone) return 0.0f;
@@ -159,21 +164,26 @@ static float scale_axis(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi, fl
 /* Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
    has (the stick springs back to the middle when released).
 
-   The released/centered position is treated as throttle 0, and pushing the
-   stick up raises it to 1. Pulling the stick down stays at 0 rather than going
-   negative, because Liftoff has no use for negative throttle.
+   Released = 0, pushed up = 1. Pulling the stick down past the released point
+   stays at 0 rather than going negative, since Liftoff has no use for a
+   negative throttle.
 
-   result = (raw - center) / (max - center), clamped to 0.0 .. 1.0 */
+   The calibration carries the direction: "hi" is wherever the channel counts
+   towards as the stick goes up. If the controller reports that channel
+   backwards, the recorded min and max simply arrive swapped, so "hi" ends up
+   smaller than "ctr" and the division below still produces the right sign.
+   That is why the ends are swapped in the config instead of the result being
+   negated afterwards: negating a value already clamped at 0 would make the
+   whole lower half of the stick read as full throttle. */
 static float scale_axis_unipolar(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi) {
     (void)lo;
     int span = (int)hi - (int)ctr;
-    if (span <= 0) return 0.0f;
+    if (span == 0) return 0.0f;
     float frac = (float)((int)raw - (int)ctr) / (float)span;
     if (frac > 1.0f) frac = 1.0f;
     if (frac < 0.0f) frac = 0.0f;
     return frac;
 }
-
 /* libusb dynamic function pointers */
 typedef struct libusb_context libusb_context;
 typedef struct libusb_device_handle libusb_device_handle;
@@ -309,8 +319,14 @@ static void load_calib_json_if_present(DJIRC2SharedState *st) {
             uint16_t mn = a[@"min"]    ? (uint16_t)[a[@"min"] unsignedIntValue]    : st->cal_min[i];
             uint16_t ct = a[@"center"] ? (uint16_t)[a[@"center"] unsignedIntValue] : st->cal_ctr[i];
             uint16_t mx = a[@"max"]    ? (uint16_t)[a[@"max"] unsignedIntValue]    : st->cal_max[i];
-            /* Skip ranges that are too narrow to be real, or self-inconsistent. */
-            BOOL sane = (mn < ct && ct < mx) && ((int)(mx - mn) >= MIN_USABLE_SPAN);
+            /* Skip ranges that are too narrow to be real, or self-inconsistent.
+               Either direction is fine: a backwards channel reports min and max
+               swapped, and the unipolar/bipolar scalers read the direction from
+               those values rather than assuming min is always the low end. */
+            int lo_end = (mn < mx) ? mn : mx;
+            int hi_end = (mn < mx) ? mx : mn;
+            BOOL sane = (lo_end < ct && ct < hi_end) &&
+                        ((hi_end - lo_end) >= MIN_USABLE_SPAN);
             if (sane) {
                 st->cal_min[i] = mn;
                 st->cal_ctr[i] = ct;
@@ -362,13 +378,21 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
             const uint8_t *pay = &buf[i + 11];
             int pay_len = plen - 13;
             if (cmd_set == 0x06 && cmd_id == 0x38 && pay_len >= 37) {
-                /* Hardware stick calibration table: 6 * (min, center, max) */
+                /* Hardware stick calibration table: 6 * (min, center, max).
+                   A channel that counts backwards reports its ends swapped, so
+                   the range is accepted in either direction. What matters is
+                   that the center sits between the two ends and the range is
+                   wide enough to be a real axis rather than sensor noise. */
                 for (int c = 0; c < 6; c++) {
                     const uint8_t *p = pay + 1 + c * 6;
                     uint16_t mn = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
                     uint16_t ct = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
                     uint16_t mx = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
-                    if (mn < ct && ct < mx && (int)(mx - mn) >= MIN_USABLE_SPAN) {
+                    int lo_end = (mn < mx) ? mn : mx;
+                    int hi_end = (mn < mx) ? mx : mn;
+                    int usable = (lo_end < ct && ct < hi_end &&
+                                  (hi_end - lo_end) >= MIN_USABLE_SPAN);
+                    if (usable) {
                         st->cal_min[c] = mn;
                         st->cal_ctr[c] = ct;
                         st->cal_max[c] = mx;
@@ -404,9 +428,12 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                     int src = g_axisMap[role].source;
                     float v = (src >= 0 && src < 6) ? scaled[src] : 0.0f;
                     if (g_axisMap[role].invert) {
-                        /* For a unipolar axis, "invert" means flipping the range
-                           (0.0 <-> 1.0), not negating it. Negating a 0..1 value
-                           would produce a negative throttle, which is meaningless. */
+                        /* Directions are normally fixed by the calibration ends,
+                           so this is a deliberate override for a role that still
+                           feels wrong. Bipolar axes negate; a unipolar axis has
+                           no negative side, so negating would give a negative
+                           throttle and is meaningless. For those the value is
+                           reflected within its own range instead. */
                         v = g_axisMap[role].center ? -v : (1.0f - v);
                     }
                     role_value[role] = v;
