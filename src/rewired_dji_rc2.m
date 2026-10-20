@@ -403,7 +403,13 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                 for (int role = 0; role < AXIS_COUNT; role++) {
                     int src = g_axisMap[role].source;
                     float v = (src >= 0 && src < 6) ? scaled[src] : 0.0f;
-                    role_value[role] = g_axisMap[role].invert ? -v : v;
+                    if (g_axisMap[role].invert) {
+                        /* For a unipolar axis, "invert" means flipping the range
+                           (0.0 <-> 1.0), not negating it. Negating a 0..1 value
+                           would produce a negative throttle, which is meaningless. */
+                        v = g_axisMap[role].center ? -v : (1.0f - v);
+                    }
+                    role_value[role] = v;
                 }
                 st->aileron     = role_value[AXIS_ROLL];
                 st->elevator    = role_value[AXIS_PITCH];
