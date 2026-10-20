@@ -118,7 +118,14 @@ This will:
 
 ### 6. Launch Liftoff & plug in the controller
 
-1. Start **Liftoff** from Steam
+1. Start **Liftoff from Steam** — press Play in the Steam library, or run:
+
+   ```bash
+   open "steam://rungameid/410340"
+   ```
+
+   ⚠️ **Launch it through Steam, not with `open -a Liftoff.app`.** Liftoff needs Steam to hand it the app ID, and without it Steamworks fails to initialise and the game stops before it ever loads the input system. You will see `Steamworks is not initialized` in the log and the controller will not be picked up at all, no matter how the plugin is installed.
+
 2. Connect the DJI RC 2 with a USB-C cable and power it on
 3. Run the bridge in a terminal:
 
@@ -159,27 +166,23 @@ Results are saved to `src/calib.json`.
 
 The DJI RC 2's left stick is **self-centering** — release it and it springs back to the middle. Most FPV radios instead have a friction/ratchet throttle that stays where you leave it, so this one difference trips up nearly everyone.
 
-This project therefore treats the **released (centered) position as throttle 0**:
+The stick is still scaled **bipolar**, the same as roll, pitch and yaw, so the whole travel is used and the axis can reach its low end:
 
 | Stick position | Throttle sent to Liftoff |
 |:--|:--|
+| Fully down | `-1.00` |
 | Released / centered | `0.00` |
 | Halfway up | `~0.50` |
-| Fully up | `1.00` |
-| Pulled down | `0.00` (clamped, never negative) |
+| Fully up | `+1.00` |
 
-So you push up to climb and let go to idle — no need to hold the stick down while flying, and no surprise spin-up when you release it.
+That gives you a real negative value at the bottom, which matters: Liftoff arms on **throttle low plus yaw**, and a throttle that only ever reports `0..1` sits in the middle of the axis where that gesture can never be satisfied. With this mapping you pull the left stick down, hold it there, and move the yaw to arm.
 
-This is controlled by `center` in the `mapping` block of `src/calib.json`:
+If you have fitted a ratchet/friction throttle to your radio and would rather have the conventional "bottom = 0, top = 1" feel, set that channel to `"center": false` in the `mapping` block of `src/calib.json` and it is scaled as a lever that rests at its low end instead.
 
-```json
-"throttle": { "source": 2, "invert": false, "center": false }
-```
+The `center` flag in the `mapping` block chooses between the two:
 
-- `center: true` → bipolar, for self-centering sticks (`-1..1`, zero in the middle). Used for roll, pitch and yaw.
-- `center: false` → unipolar with the center as zero (`0..1`). Used for throttle.
-
-If you have fitted a ratchet/friction throttle to your radio and want the conventional "bottom = 0, top = 1" feel, flip that channel to the full range by giving it `"center": true` temporarily, or simply recalibrate with the stick held at the bottom.
+- `center: true` → bipolar, zero in the middle (`-1..1`). Used for every axis here, throttle included.
+- `center: false` → a lever that rests at its low end, scaled `-1..1` with the resting position at `-1`.
 
 ## 🗑️ Uninstallation
 
@@ -194,10 +197,13 @@ Restores the original `Rewired_MacOS.bundle` from backup and reverts the `Rewire
 | Symptom | Fix |
 |:--|:--|
 | `Folder Liftoff PlugIns tidak ditemukan` | Liftoff isn't where the script expects it — see [step 4](#-locating-liftoff). |
+| **Controller not detected at all, no telemetry** | Launch Liftoff **through Steam** (`open "steam://rungameid/410340"`), not with `open -a`. Without Steam the game fails to initialise and never loads the input system. Check `~/Library/Logs/LuGus Studios/Liftoff/Player.log` for `Steamworks is not initialized`. |
 | `[Waiting for DJI RC 2 on USB...]` | Make sure the controller is **powered on** and connected via a **data-capable** USB-C cable (some cables are charge-only). Check with `system_profiler SPUSBDataType`. |
 | `LIBUSB_ERROR_ACCESS` | Another process (or Liftoff itself) is claiming the USB interface. Unplug/replug the controller, or quit Liftoff and retry. |
 | `LIBUSB_ERROR_NOT_FOUND` | `libusb` isn't installed or isn't in the expected Homebrew path. Run `brew install libusb`. |
+| Controller shows in System Information but `libusb` sees nothing | macOS is gating the device. Unplug it, wait a few seconds, and plug it straight into a USB-C port on the machine rather than through a hub. `scripts/check_usb.py` compares what macOS sees against what `libusb` can open. |
 | Sticks drift / don't reach ±1.00 | Recalibrate: `./scripts/run.sh --calibrate` |
+| Can't arm the drone | The throttle must be able to reach its low end. Confirm `Ly(Thr)` goes negative when you pull the left stick down; if it does not, recalibrate so the throttle is scaled bipolar. |
 | Plugin not loaded by Liftoff | Verify code signatures: `codesign --verify --verbose=2` on the bundle. On some macOS versions you may need to allow it under **System Settings → Privacy & Security**. |
 | Steam verifies game files & wipes the plugin | Just re-run `./scripts/install.sh` — it's idempotent. |
 
