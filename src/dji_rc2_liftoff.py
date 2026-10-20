@@ -412,34 +412,110 @@ def run_interactive_calibration():
     cal_min = list(cal_ctr)
     cal_max = list(cal_ctr)
 
-    print("Langkah 2/2: Putar KEDUA STICK dan KEDUA WHEEL (dial atas) mentok ke segala arah selama 8 detik!")
-    t_end = time.time() + 8.0
-    while time.time() < t_end:
-        seq = (seq + 1) & 0xFFFF
-        dev.write(info["ep_out"], build_duml(10, 6, seq, 0x40, 0x06, 0xF5), timeout=100)
-        try:
-            raw = bytes(dev.read(info["ep_in"], 512, timeout=20))
-            leftover += raw
-            pkts, leftover = split_packets(leftover)
-            leftover = bytearray(leftover)
-            for p in pkts:
-                if p[9] == 0x06 and p[10] == 0xF5 and len(p) >= 26:
-                    vals = struct.unpack("<B6H", p[11:24])
-                    for i in range(6):
-                        v = vals[1 + i]
-                        if v < cal_min[i]:
-                            cal_min[i] = v
-                        if v > cal_max[i]:
-                            cal_max[i] = v
-                    rem = max(0.0, t_end - time.time())
-                    sys.stdout.write(f"\rSisa waktu: {rem:4.1f}s | Span: {[cal_max[i]-cal_min[i] for i in range(6)]}   ")
-                    sys.stdout.flush()
-        except Exception:
-            pass
+    def sweep(duration, prompt):
+        """Collect extremes while the caller moves the inputs."""
+        nonlocal seq, leftover
+        print(prompt)
+        t_end = time.time() + duration
+        while time.time() < t_end:
+            seq = (seq + 1) & 0xFFFF
+            dev.write(info["ep_out"], build_duml(10, 6, seq, 0x40, 0x06, 0xF5), timeout=100)
+            try:
+                raw = bytes(dev.read(info["ep_in"], 512, timeout=20))
+                leftover += raw
+                pkts, leftover = split_packets(leftover)
+                leftover = bytearray(leftover)
+                for p in pkts:
+                    if p[9] == 0x06 and p[10] == 0xF5 and len(p) >= 26:
+                        vals = struct.unpack("<B6H", p[11:24])
+                        for i in range(6):
+                            v = vals[1 + i]
+                            if v < cal_min[i]:
+                                cal_min[i] = v
+                            if v > cal_max[i]:
+                                cal_max[i] = v
+                        rem = max(0.0, t_end - time.time())
+                        span = [cal_max[i] - cal_min[i] for i in range(6)]
+                        sys.stdout.write(f"\rSisa waktu: {rem:4.1f}s | Span: {span}   ")
+                        sys.stdout.flush()
+            except Exception:
+                pass
+        return seq
+
+    seq = sweep(8.0, "Langkah 2/2: Putar KEDUA STICK dan KEDUA WHEEL (dial atas) mentok ke segala arah selama 8 detik!")
+    # A min/max sweep alone cannot tell which end of a channel is the top of the
+    # stick. Without that, the plugin picks a direction by guesswork and the
+    # axes come out backwards. Measure the direction explicitly and swap the
+    # ends where the controller counts the other way.
+    print("\n\nLangkah 3/3: Sekarang tentukan ARAH tiap stick (sebentar saja).")
+
+    def measure_raw(seconds=1.5):
+        """Average the six raw channels over a short hold."""
+        nonlocal seq
+        acc = [[] for _ in range(6)]
+        t_end = time.time() + seconds
+        while time.time() < t_end:
+            seq = (seq + 1) & 0xFFFF
+            dev.write(info["ep_out"], build_duml(10, 6, seq, 0x40, 0x06, 0xF5), timeout=100)
+            try:
+                raw = bytes(dev.read(info["ep_in"], 512, timeout=20))
+                buf = bytearray(raw)
+                pkts, _ = split_packets(buf)
+                for p in pkts:
+                    if p[9] == 0x06 and p[10] == 0xF5 and len(p) >= 26:
+                        vals = struct.unpack("<B6H", p[11:24])
+                        for i in range(6):
+                            acc[i].append(vals[1 + i])
+            except Exception:
+                pass
+        return [int(round(sum(c) / max(1, len(c)))) for c in acc]
+
+    def ask(prompt):
+        input(f">>> {prompt} Tahan, lalu tekan Enter... ")
+        return measure_raw()
+
+    chrono_up = ask("Lepas penuh stick KIRI (netral).")[2]
+    left_up = ask("Dorong stick KIRI mentok ke ATAS.")[2]
+    left_dn = ask("Tarik stick KIRI mentok ke BAWAH.")[2]
+
+    # Throttle must read 0 when released and 1 when pushed up, so "max" has to
+    # be the end the channel reaches with the stick up.
+    if left_up < left_dn:
+        cal_min[2], cal_max[2] = cal_max[2], cal_min[2]
+        print("    Throttle: channel dihitung terbalik, ujung ditukar.")
+    else:
+        print("    Throttle: arah sudah benar.")
+    cal_ctr[2] = chrono_up if chrono_up else cal_ctr[2]
+
+    right_l = ask("Dorong stick KANAN mentok ke KIRI (roll).")[0]
+    right_r = ask("Dorong stick KANAN mentok ke KANAN (roll).")[0]
+    if right_l > right_r:
+        cal_min[0], cal_max[0] = cal_max[0], cal_min[0]
+        print("    Roll: channel dihitung terbalik, ujung ditukar.")
+    else:
+        print("    Roll: arah sudah benar.")
+
+    pitch_up = ask("Dorong stick KANAN mentok ke ATAS (pitch).")[1]
+    pitch_dn = ask("Tarik stick KANAN mentok ke BAWAH (pitch).")[1]
+    if pitch_up < pitch_dn:
+        cal_min[1], cal_max[1] = cal_max[1], cal_min[1]
+        print("    Pitch: channel dihitung terbalik, ujung ditukar.")
+    else:
+        print("    Pitch: arah sudah benar.")
+
+    yaw_l = ask("Dorong stick KIRI mentok ke KIRI (yaw).")[3]
+    yaw_r = ask("Dorong stick KIRI mentok ke KANAN (yaw).")[3]
+    if yaw_l > yaw_r:
+        cal_min[3], cal_max[3] = cal_max[3], cal_min[3]
+        print("    Yaw: channel dihitung terbalik, ujung ditukar.")
+    else:
+        print("    Yaw: arah sudah benar.")
 
     usb.util.release_interface(dev, info["iface"])
     save_calib(info, cal_min, cal_ctr, cal_max)
     print(f"\nKalibrasi berhasil disimpan ke {CALIB_FILE_PATH}!")
+    print("Arah sudah diukur, jadi sumbu tidak akan terbalik.")
+    print("Jalankan ./scripts/install.sh lalu restart Liftoff agar dipakai.")
 
 
 def run_axis_identification():
@@ -611,6 +687,19 @@ def main():
                 )
                 sys.stdout.flush()
                 time.sleep(0.016)
+                continue
+
+            # Stale or absent state while Liftoff holds the controller. This is
+            # expected whenever Liftoff was started before the plugin was last
+            # installed: it keeps the old plugin in memory and never writes new
+            # samples, so the values shown would be frozen rather than live.
+            if dev is None and (writer_pid != 0 and writer_pid != my_pid):
+                age = time.time() - ts
+                sys.stdout.write(
+                    f"\r[Data dari PID {writer_pid} basi ({age:.1f}s). "
+                    f"Restart Liftoff agar plugin terbaru termuat.     ")
+                sys.stdout.flush()
+                time.sleep(0.3)
                 continue
 
             if dev is None:

@@ -213,6 +213,15 @@ static GCController *g_virtualCtrl = nil;
 static dispatch_queue_t g_ctrlQueue = nil;
 static DJIRC2SharedState *g_shm = NULL;
 static DJIRC2SharedState g_localState;
+
+/* Channels whose calibration came from calib.json. The controller also reports
+   its own calibration table, and those readings would otherwise overwrite the
+   file on every connection. Marking the JSON-sourced channels keeps the file
+   authoritative, which matters because it is the one the user edits: if the
+   controller silently replaced it, tuned values would look like they did
+   nothing. Kept separate from the shared struct so the memory layout that the
+   Python bridge unpacks stays unchanged. */
+static int g_calibFromJson[6] = {0, 0, 0, 0, 0, 0};
 static pthread_mutex_t g_stateMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_usbThread;
 static volatile int g_running = 0;
@@ -331,6 +340,7 @@ static void load_calib_json_if_present(DJIRC2SharedState *st) {
                 st->cal_min[i] = mn;
                 st->cal_ctr[i] = ct;
                 st->cal_max[i] = mx;
+                g_calibFromJson[i] = 1;
             } else {
                 plugin_log("calib: channel %d ignored (span=%d, min=%u ctr=%u max=%u) - keeping default\n",
                            i, (int)(mx - mn), mn, ct, mx);
@@ -388,6 +398,10 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                     uint16_t mn = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
                     uint16_t ct = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
                     uint16_t mx = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
+                    /* A channel calibrated from the file keeps the file's
+                       values: the controller repeats this table periodically
+                       and would otherwise undo the user's calibration. */
+                    if (g_calibFromJson[c]) continue;
                     int lo_end = (mn < mx) ? mn : mx;
                     int hi_end = (mn < mx) ? mx : mn;
                     int usable = (lo_end < ct && ct < hi_end &&
@@ -521,7 +535,6 @@ static void *usb_poll_thread(void *arg) {
                     build_duml_req(pkt38, 10, 6, ++seq, 0x40, 0x06, 0x38);
                     fn_bulk(dev, ep_out, pkt38, 13, &xfer, 25);
                     pthread_mutex_lock(&g_stateMutex);
-                    load_calib_json_if_present(&g_localState);
                     for (int tries = 0; tries < 5; tries++) {
                         if (fn_bulk(dev, ep_in, rbuf, sizeof(rbuf), &xfer, 15) == 0 && xfer > 0) {
                             parse_duml_buffer(rbuf, xfer, &g_localState, NULL);
@@ -529,6 +542,13 @@ static void *usb_poll_thread(void *arg) {
                             break;
                         }
                     }
+                    /* Read the config last so it wins over the hardware table.
+                       Order matters: calib.json is the file the user edits, so
+                       having the controller silently overwrite it would make
+                       every hand-tuned value look like it had no effect. The
+                       hardware values still seed the defaults, which is what
+                       makes a fresh install work before any calibration. */
+                    load_calib_json_if_present(&g_localState);
                     pthread_mutex_unlock(&g_stateMutex);
                 }
             }
