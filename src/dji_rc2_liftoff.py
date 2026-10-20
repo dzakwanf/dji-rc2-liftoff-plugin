@@ -381,7 +381,7 @@ def run_interactive_calibration():
     usb.util.claim_interface(dev, info["iface"])
 
     print(f"=== Kalibrasi {info['name']} ===")
-    print("Langkah 1/2: Lepaskan kedua stick & dial ke posisi TENGAH selama 2 detik...")
+    print("Langkah 1/3: Lepaskan kedua stick & dial ke posisi TENGAH selama 2 detik...")
     seq = 1
     leftover = bytearray()
     centers = [[] for _ in range(6)]
@@ -436,7 +436,7 @@ def run_interactive_calibration():
                 pass
         return seq
 
-    seq = sweep(8.0, "Langkah 2/2: Putar KEDUA STICK dan KEDUA WHEEL (dial atas) mentok ke segala arah selama 8 detik!")
+    seq = sweep(8.0, "Langkah 2/3: Putar KEDUA STICK dan KEDUA WHEEL (dial atas) mentok ke segala arah selama 8 detik!")
     # A min/max sweep alone cannot tell which end of a channel is the top of the
     # stick. Without that, the plugin picks a direction by guesswork and the
     # axes come out backwards. Measure the direction explicitly and swap the

@@ -14,13 +14,14 @@ No ADB unlocking. No root or `sudo`. No extra dongles to buy. Plug in a USB-C ca
 
 ## ✨ Features
 
-- 🎯 **~240 Hz polling** — direct DUML protocol polling over USB, no perceptible latency
+- 🎯 **~200 Hz polling** — direct DUML protocol polling over USB, no perceptible latency
 - 🔌 **True plug-and-play** — works out of the box with the factory stick calibration stored in the controller's MCU
 - 🧠 **Smart conflict avoidance** — automatically detects when Liftoff is polling USB itself and switches to a passive shared-memory monitor; both can run side by side, forever
 - ⚙️ **Zero privileges** — no `sudo`, no root, no Android/ADB unlocking of the controller
 - 🍎 **Universal binary** — the injected plugin is compiled for both Apple Silicon (`arm64`) and Intel (`x86_64`)
 - 🛟 **Fully reversible** — the installer keeps a pristine backup of every file it touches; one command restores everything
-- 🧰 **Interactive calibration tool** — on-screen wizard to fine-tune stick centers and ranges per-axis
+- 🧰 **Interactive calibration** — a guided wizard that measures the travel *and* the direction of every stick, so the axes come out the right way round
+- 🩺 **Diagnostic toolkit** — a set of small scripts that measure what the controller actually reports, for when something does not add up
 
 ## 📦 Supported Hardware
 
@@ -53,10 +54,25 @@ No ADB unlocking. No root or `sudo`. No extra dongles to buy. Plug in a USB-C ca
 2. **The bridge** (`src/dji_rc2_liftoff.py`) talks DUML — DJI's own serial protocol — straight to the controller over USB, decodes stick positions, applies calibration, and publishes them to a shared-memory file (`/tmp/dji_rc2_state.bin`).
 3. **The plugin reads the shared memory** and feeds the values into Liftoff as a standard game controller. If you launch the plugin *inside* Liftoff first, the Python bridge notices and politely backs off into monitor-only mode — no USB contention, ever.
 
+### Control mapping
+
+The controller presents itself to Liftoff as a gamepad with a familiar layout:
+
+| Physical control | Gamepad axis | Monitor label |
+|:--|:--|:--|
+| Left stick, horizontal | `leftThumbstick.xAxis` | `Lx(Yaw)` |
+| Left stick, vertical | `leftThumbstick.yAxis` | `Ly(Thr)` |
+| Right stick, horizontal | `rightThumbstick.xAxis` | `Rx(Rol)` |
+| Right stick, vertical | `rightThumbstick.yAxis` | `Ry(Pit)` |
+| Top-left wheel | `leftTrigger` | `WL` |
+| Top-right wheel | `rightTrigger` | `WR` |
+
+Every axis runs from `-1.00` to `+1.00` with zero in the middle, so the full travel of the stick is used in both directions.
+
 ## 📋 Requirements
 
 - macOS on **Apple Silicon** or **Intel**
-- [Liftoff: FPV Drone Racing](https://store.steampowered.com/app/431710/Liftoff_FPV_Drone_Racing/) installed via **Steam**
+- [Liftoff: FPV Drone Racing](https://store.steampowered.com/app/410340/Liftoff_FPV_Drone_Racing/) installed via **Steam**
 - A **DJI RC 2** (or DJI RC) remote controller
 - [Homebrew](https://brew.sh)
 - Xcode Command Line Tools (`clang`, `install_name_tool`, `codesign`)
@@ -155,12 +171,47 @@ The bridge already fetches the factory stick calibration from the controller's M
 ./scripts/run.sh --calibrate
 ```
 
-You'll be guided through a two-step wizard:
+You'll be guided through a three-step wizard:
 
 1. **Step 1 (2 s):** release both sticks and wheels to their center position
 2. **Step 2 (8 s):** rotate both sticks and both wheels to their extremes in every direction
+3. **Step 3:** hold each stick at a known extreme so the wizard can tell which end of a channel is the top of the stick
+
+Step 3 is what keeps the axes from coming out backwards. A min/max sweep on its own cannot tell you whether the top of the stick is the larger or the smaller number, so the wizard asks you to hold each direction and records it.
 
 Results are saved to `src/calib.json`.
+
+### Checking the channel order
+
+If a stick shows up under the wrong label — pushing the right stick sideways moves the value the plugin calls yaw, for instance — the controller's firmware has ordered the channels differently than expected. `./scripts/run.sh --identify` walks you through each input and reports which raw channel it actually moves, along with a `mapping` block ready to paste into `src/calib.json`.
+
+### The `mapping` block
+
+`src/calib.json` has two parts. `axes` holds the measured range for each channel, and `mapping` says which channel drives which role and in which direction:
+
+```json
+"mapping": {
+  "roll":     { "source": 0, "invert": false, "center": true },
+  "pitch":    { "source": 1, "invert": false, "center": true },
+  "throttle": { "source": 2, "invert": false, "center": true },
+  "yaw":      { "source": 3, "invert": false, "center": true }
+}
+```
+
+- `source` — which raw channel the role reads.
+- `invert` — flips the sign, for when a role still feels the wrong way round.
+- `center` — `true` for a stick that rests in the middle (bipolar, `-1..1`), `false` for a lever that rests at one end.
+
+The expected direction of each axis is recorded in the file itself, under `_direction`:
+
+```json
+"_direction": {
+  "roll":     "kanan = positif, kiri = negatif",
+  "pitch":    "atas = positif, bawah = negatif",
+  "throttle": "atas = +1.0, netral = 0.0, bawah = -1.0",
+  "yaw":      "kanan = positif, kiri = negatif"
+}
+```
 
 ## 🕹️ Throttle Behaviour
 
@@ -176,6 +227,8 @@ The stick is still scaled **bipolar**, the same as roll, pitch and yaw, so the w
 | Fully up | `+1.00` |
 
 That gives you a real negative value at the bottom, which matters: Liftoff arms on **throttle low plus yaw**, and a throttle that only ever reports `0..1` sits in the middle of the axis where that gesture can never be satisfied. With this mapping you pull the left stick down, hold it there, and move the yaw to arm.
+
+Because the stick springs back, you have to **hold** it down while you yaw rather than just resting it there.
 
 If you have fitted a ratchet/friction throttle to your radio and would rather have the conventional "bottom = 0, top = 1" feel, set that channel to `"center": false` in the `mapping` block of `src/calib.json` and it is scaled as a lever that rests at its low end instead.
 
@@ -207,6 +260,26 @@ Restores the original `Rewired_MacOS.bundle` from backup and reverts the `Rewire
 | Plugin not loaded by Liftoff | Verify code signatures: `codesign --verify --verbose=2` on the bundle. On some macOS versions you may need to allow it under **System Settings → Privacy & Security**. |
 | Steam verifies game files & wipes the plugin | Just re-run `./scripts/install.sh` — it's idempotent. |
 
+## 🩺 Diagnostic Toolkit
+
+Sometimes the numbers do not add up and it is hard to tell whether the problem is the cable, macOS, the plugin, or the calibration. These small scripts each answer one question by measuring the controller directly.
+
+Most of them read the shared-memory file, so start the bridge first in one terminal and run the script in another:
+
+```bash
+./scripts/run.sh          # terminal 1
+.venv/bin/python scripts/diagnose_axes.py   # terminal 2
+```
+
+| Script | What it answers |
+|:--|:--|
+| `scripts/check_usb.py` | Is the controller reachable? Compares what macOS enumerates against what `libusb` can actually open. A controller that shows up in System Information but is invisible to `libusb` is a permissions problem, not a cable one. |
+| `scripts/diagnose_axes.py` | Which way does each stick really read? Sweeps every channel and reports the direction the device actually produces. |
+| `scripts/diagnose_throttle.py` | Which way does the throttle read? Focused check on the left stick, and it prints a `calib.json` block you can paste straight in. |
+| `scripts/identify_channels.py` | Which raw channel belongs to which physical input? Records all six channels at once while you hold each input in turn. |
+| `scripts/record_all.py` | Records all six channels and reports the resulting mapping, with a countdown so you do not have to race a prompt. |
+| `scripts/record_sticks.py` | Prints what the controller reports for each input as you move it. |
+
 ## 🗂️ Project Structure
 
 ```
@@ -221,7 +294,8 @@ dji-rc2-liftoff-plugin/
 ├── scripts/                      # Entry points
 │   ├── install.sh                # One-shot installer (backup → compile → install → patch → sign)
 │   ├── uninstall.sh              # Full restore from backup
-│   └── run.sh                    # Launches the bridge
+│   ├── run.sh                    # Launches the bridge (also --calibrate / --identify)
+│   └── *.py                      # Diagnostic helpers, see the toolkit above
 ├── build/                        # Local build artifacts (git-ignored, regenerated by install.sh)
 └── .venv/                        # Python virtualenv (git-ignored)
 ```

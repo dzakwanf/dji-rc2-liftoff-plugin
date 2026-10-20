@@ -13,7 +13,7 @@
     "_comment": "Which way each stick should read. The plugin derives direction from the axes min/max below, and 'invert' only flips a role if it still comes out backwards.",
     "roll": "kanan = positif, kiri = negatif",
     "pitch": "atas = positif, bawah = negatif",
-    "throttle": "atas = 1.0, netral & bawah = 0.0",
+    "throttle": "atas = +1.0, netral = 0.0, bawah = -1.0",
     "yaw": "kanan = positif, kiri = negatif"
   },
   "mapping": {
