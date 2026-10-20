@@ -187,6 +187,53 @@ static pthread_mutex_t g_stateMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_t g_usbThread;
 static volatile int g_running = 0;
 
+/* ---------------------------------------------------------------------------
+ * Axis mapping configuration
+ *
+ * DJI reports six raw channels in a fixed order. Which physical stick each one
+ * corresponds to, and which way it points, varies between units and between
+ * firmware versions. Rather than hardcoding it, we describe the mapping here
+ * and let the user override any entry from calib.json ("mapping" section).
+ *
+ * The defaults below are the DJI RC 2 (rc331) layout in Mode 2:
+ *   raw[0] = right stick horizontal  -> roll   (aileron)
+ *   raw[1] = right stick vertical    -> pitch  (elevator), inverted
+ *   raw[2] = left  stick vertical    -> throttle
+ *   raw[3] = left  stick horizontal  -> yaw    (rudder)
+ *   raw[4] = left  top wheel         -> aux
+ *   raw[5] = right top wheel         -> aux
+ * ------------------------------------------------------------------------- */
+
+typedef enum {
+    AXIS_ROLL = 0,
+    AXIS_PITCH,
+    AXIS_THROTTLE,
+    AXIS_YAW,
+    AXIS_AUX_L,
+    AXIS_AUX_R,
+    AXIS_COUNT
+} AxisRole;
+
+typedef struct {
+    int source;   /* index into the raw[6] array reported by the controller */
+    int invert;   /* 1 = flip the sign of the scaled value */
+    int center;   /* 1 = treat as a centered stick (bipolar), 0 = unipolar lever */
+} AxisMapEntry;
+
+static AxisMapEntry g_axisMap[AXIS_COUNT] = {
+    { 0, 0, 1 },  /* ROLL      <- raw[0], not inverted   */
+    { 1, 1, 1 },  /* PITCH     <- raw[1], inverted       */
+    { 2, 0, 1 },  /* THROTTLE  <- raw[2], not inverted   */
+    { 3, 0, 1 },  /* YAW       <- raw[3], not inverted   */
+    { 4, 0, 1 },  /* AUX_L     <- raw[4]                 */
+    { 5, 0, 1 },  /* AUX_R     <- raw[5]                 */
+};
+
+static const char *const kAxisRoleNames[AXIS_COUNT] = {
+    "roll", "pitch", "throttle", "yaw", "aux_left", "aux_right"
+};
+
+
 static void init_shared_state_defaults(DJIRC2SharedState *st) {
     memset(st, 0, sizeof(*st));
     st->magic = STATE_MAGIC;
@@ -203,11 +250,28 @@ static void init_shared_state_defaults(DJIRC2SharedState *st) {
     }
 }
 
+static void load_axis_mapping_if_present(NSDictionary *json) {
+    NSDictionary *mapping = json[@"mapping"];
+    if (![mapping isKindOfClass:[NSDictionary class]]) return;
+    for (int role = 0; role < AXIS_COUNT; role++) {
+        NSString *key = [NSString stringWithUTF8String:kAxisRoleNames[role]];
+        NSDictionary *entry = mapping[key];
+        if (![entry isKindOfClass:[NSDictionary class]]) continue;
+        if (entry[@"source"]) {
+            int src = [entry[@"source"] intValue];
+            if (src >= 0 && src < 6) g_axisMap[role].source = src;
+        }
+        if (entry[@"invert"])   g_axisMap[role].invert = [entry[@"invert"] boolValue] ? 1 : 0;
+        if (entry[@"center"])   g_axisMap[role].center = [entry[@"center"] boolValue] ? 1 : 0;
+    }
+}
+
 static void load_calib_json_if_present(DJIRC2SharedState *st) {
     NSData *data = [NSData dataWithContentsOfFile:@CALIB_FILE_PATH];
     if (!data) return;
     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
     if (![json isKindOfClass:[NSDictionary class]]) return;
+    load_axis_mapping_if_present(json);
     NSDictionary *axes = json[@"axes"];
     if (![axes isKindOfClass:[NSDictionary class]]) return;
     NSArray<NSString *> *names = @[@"aileron", @"elevator", @"throttle", @"rudder", @"wheel_left", @"wheel_right"];
@@ -276,12 +340,25 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                 for (int c = 0; c < 6; c++) {
                     st->raw[c] = (uint16_t)pay[1 + c * 2] | ((uint16_t)pay[2 + c * 2] << 8);
                 }
-                st->aileron     = scale_axis(st->raw[0], st->cal_min[0], st->cal_ctr[0], st->cal_max[0], 0.005f);
-                st->elevator    = scale_axis(st->raw[1], st->cal_min[1], st->cal_ctr[1], st->cal_max[1], 0.005f);
-                st->throttle    = scale_axis(st->raw[2], st->cal_min[2], st->cal_ctr[2], st->cal_max[2], 0.005f);
-                st->rudder      = scale_axis(st->raw[3], st->cal_min[3], st->cal_ctr[3], st->cal_max[3], 0.005f);
-                st->wheel_left  = scale_axis(st->raw[4], st->cal_min[4], st->cal_ctr[4], st->cal_max[4], 0.02f);
-                st->wheel_right = scale_axis(st->raw[5], st->cal_min[5], st->cal_ctr[5], st->cal_max[5], 0.02f);
+                /* Scale each physical axis through its configured mapping,
+                   then route it to the role it was assigned. */
+                float scaled[6];
+                for (int c = 0; c < 6; c++) {
+                    float deadzone = (c >= 4) ? 0.02f : 0.005f;
+                    scaled[c] = scale_axis(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c], deadzone);
+                }
+                float role_value[AXIS_COUNT];
+                for (int role = 0; role < AXIS_COUNT; role++) {
+                    int src = g_axisMap[role].source;
+                    float v = (src >= 0 && src < 6) ? scaled[src] : 0.0f;
+                    role_value[role] = g_axisMap[role].invert ? -v : v;
+                }
+                st->aileron     = role_value[AXIS_ROLL];
+                st->elevator    = role_value[AXIS_PITCH];
+                st->throttle    = role_value[AXIS_THROTTLE];
+                st->rudder      = role_value[AXIS_YAW];
+                st->wheel_left  = role_value[AXIS_AUX_L];
+                st->wheel_right = role_value[AXIS_AUX_R];
                 st->timestamp   = now_sec();
                 st->writer_pid  = (uint32_t)getpid();
                 st->connected   = 1;
@@ -507,7 +584,9 @@ void Update(void) {
 
             GCExtendedGamepad *gp = g_virtualCtrl.extendedGamepad;
             if (gp) {
-                [gp.leftThumbstick.xAxis setValue:-st.rudder];
+                /* Values are already normalized and sign-corrected by g_axisMap,
+                   so they are fed through verbatim here. */
+                [gp.leftThumbstick.xAxis setValue:st.rudder];
                 [gp.leftThumbstick.yAxis setValue:st.throttle];
                 [gp.rightThumbstick.xAxis setValue:st.aileron];
                 [gp.rightThumbstick.yAxis setValue:st.elevator];

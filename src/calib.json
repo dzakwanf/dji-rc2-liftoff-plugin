@@ -9,6 +9,15 @@
   "cmd_id": 245,
   "src": 6,
   "payload_len": 13,
+  "mapping": {
+    "_comment": "Which raw channel feeds which role, and whether to flip its sign. source = raw[] index (0-5).",
+    "roll":      { "source": 0, "invert": false },
+    "pitch":     { "source": 1, "invert": true  },
+    "throttle":  { "source": 2, "invert": false },
+    "yaw":       { "source": 3, "invert": false },
+    "aux_left":  { "source": 4, "invert": false },
+    "aux_right": { "source": 5, "invert": false }
+  },
   "axes": {
     "aileron": {
       "offset": 1,

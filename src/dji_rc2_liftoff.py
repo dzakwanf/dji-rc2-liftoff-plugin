@@ -213,6 +213,16 @@ def load_calib():
     return cal_min, cal_ctr, cal_max
 
 
+DEFAULT_MAPPING = {
+    "roll":      {"source": 0, "invert": False},
+    "pitch":     {"source": 1, "invert": True},
+    "throttle":  {"source": 2, "invert": False},
+    "yaw":       {"source": 3, "invert": False},
+    "aux_left":  {"source": 4, "invert": False},
+    "aux_right": {"source": 5, "invert": False},
+}
+
+
 def save_calib(dev_info, cal_min, cal_ctr, cal_max):
     axes = {}
     for i, name in enumerate(AXIS_NAMES):
@@ -222,6 +232,20 @@ def save_calib(dev_info, cal_min, cal_ctr, cal_max):
             "center": int(cal_ctr[i]),
             "max": int(cal_max[i]),
         }
+
+    # Preserve any user-tuned axis mapping instead of clobbering it.
+    mapping = dict(DEFAULT_MAPPING)
+    if os.path.exists(CALIB_FILE_PATH):
+        try:
+            with open(CALIB_FILE_PATH) as f:
+                existing = json.load(f).get("mapping")
+            if isinstance(existing, dict):
+                for key, val in existing.items():
+                    if isinstance(val, dict):
+                        mapping[key] = val
+        except Exception:
+            pass
+
     cfg = {
         "device": dev_info["name"],
         "vid": DJI_VID,
@@ -233,6 +257,7 @@ def save_calib(dev_info, cal_min, cal_ctr, cal_max):
         "cmd_id": 245,
         "src": 6,
         "payload_len": 13,
+        "mapping": mapping,
         "axes": axes,
     }
     with open(CALIB_FILE_PATH, "w") as f:
@@ -314,7 +339,128 @@ def run_interactive_calibration():
     print(f"\nKalibrasi berhasil disimpan ke {CALIB_FILE_PATH}!")
 
 
+def run_axis_identification():
+    """
+    Walk the user through each physical input and report which raw channel
+    actually moves. This is how you find out that - say - raw[3] is really the
+    right stick's vertical axis on your unit, instead of guessing.
+    """
+    dev, info = find_dji_usb()
+    if dev is None:
+        sys.exit("Tidak menemukan DJI RC 2 di USB (pastikan remote menyala & terhubung via USB-C).")
+    try:
+        if dev.is_kernel_driver_active(info["iface"]):
+            dev.detach_kernel_driver(info["iface"])
+    except Exception:
+        pass
+    usb.util.claim_interface(dev, info["iface"])
+
+    prompts = [
+        ("RIGHT stick LEFT <- -> RIGHT", "Roll (aileron)"),
+        ("RIGHT stick UP <- -> DOWN", "Pitch (elevator)"),
+        ("LEFT stick UP <- -> DOWN", "Throttle"),
+        ("LEFT stick LEFT <- -> RIGHT", "Yaw (rudder)"),
+        ("LEFT top wheel (rotate fully)", "aux_left"),
+        ("RIGHT top wheel (rotate fully)", "aux_right"),
+    ]
+
+    print("=" * 70)
+    print("  AXIS IDENTIFICATION")
+    print("  Follow each prompt. Move ONLY the input being asked about, then")
+    print("  return it to center and wait for the result.")
+    print("=" * 70)
+
+    results = {}
+    seq = 1
+    leftover = bytearray()
+
+    def poll_once():
+        nonlocal seq, leftover
+        seq = (seq + 1) & 0xFFFF
+        dev.write(info["ep_out"], build_duml(10, 6, seq, 0x40, 0x06, 0xF5), timeout=100)
+        raw = bytes(dev.read(info["ep_in"], 512, timeout=20))
+        leftover += raw
+        pkts, leftover = split_packets(leftover)
+        leftover = bytearray(leftover)
+        for p in pkts:
+            if p[9] == 0x06 and p[10] == 0xF5 and len(p) >= 26:
+                return list(struct.unpack("<B6H", p[11:24])[1:])
+        return None
+
+    def sample(seconds):
+        """Record min/max per channel over a short window."""
+        lo = [65535] * 6
+        hi = [0] * 6
+        t_end = time.time() + seconds
+        while time.time() < t_end:
+            vals = poll_once()
+            if vals:
+                for i in range(6):
+                    lo[i] = min(lo[i], vals[i])
+                    hi[i] = max(hi[i], vals[i])
+        return [hi[i] - lo[i] for i in range(6)]
+
+    # Establish a resting baseline so we can report absolute movement too.
+    print("\nBaseline: lepaskan semua stick & wheel (3 detik)...")
+    base_lo = [65535] * 6
+    base_hi = [0] * 6
+    t_end = time.time() + 3.0
+    baseline = None
+    while time.time() < t_end:
+        vals = poll_once()
+        if vals:
+            baseline = vals
+            for i in range(6):
+                base_lo[i] = min(base_lo[i], vals[i])
+                base_hi[i] = max(base_hi[i], vals[i])
+    if baseline is None:
+        usb.util.release_interface(dev, info["iface"])
+        sys.exit("Gagal membaca data dari controller.")
+    print(f"  Resting raw values: {baseline}")
+
+    for prompt, role in prompts:
+        input(f"\n>>> {prompt}  [tekan Enter kalau siap] ")
+        print("    Merekan 3 detik... gerakkan sekarang!")
+        spans = sample(3.0)
+        ranked = sorted(range(6), key=lambda i: spans[i], reverse=True)
+        best = ranked[0]
+        results[role] = (best, spans[best])
+        print(f"    -> channel yang paling bergerak: raw[{best}] (span {spans[best]})")
+        print(f"       semua span: {spans}")
+
+    usb.util.release_interface(dev, info["iface"])
+
+    print("\n" + "=" * 70)
+    print("  HASIL")
+    print("=" * 70)
+    for prompt, role in prompts:
+        ch, span = results[role]
+        print(f"  {role:<18} = raw[{ch}]   (span {span})")
+
+    sources = {}
+    for role, (ch, _) in results.items():
+        sources.setdefault(ch, []).append(role)
+    conflicts = {ch: roles for ch, roles in sources.items() if len(roles) > 1}
+    if conflicts:
+        print("\n  ⚠️  Ada konflik (satu channel dipakai beberapa role):")
+        for ch, roles in conflicts.items():
+            print(f"      raw[{ch}] <- {', '.join(roles)}")
+        print("      Coba ulangi, dan pastikan hanya SATU input digerakkan tiap langkah.")
+    else:
+        print("\n  ✅ Tidak ada konflik — setiap input punya channel sendiri.")
+
+    print("\n  Langkah selanjutnya:")
+    print("   1. Buka src/calib.json")
+    print("   2. Sesuaikan blok \"mapping\" dengan tabel di atas, mis.:")
+    print('        "yaw": { "source": 3, "invert": false }')
+    print("   3. Kalau arah stick masih terbalik, ubah \"invert\" jadi true.")
+    print("   4. Jalankan ./scripts/install.sh lagi supaya plugin dibuild ulang.")
+
+
 def main():
+    if "--identify" in sys.argv or "--identify-axes" in sys.argv:
+        run_axis_identification()
+        return
     if "--calibrate" in sys.argv:
         run_interactive_calibration()
         return
