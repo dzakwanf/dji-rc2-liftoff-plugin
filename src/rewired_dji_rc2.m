@@ -234,6 +234,14 @@ static const char *const kAxisRoleNames[AXIS_COUNT] = {
 };
 
 
+/* A calibration range this narrow means the channel was never actually moved
+   during calibration, so the recorded values are pure noise. Feeding such a
+   range into scale_axis() turns 1-2 LSB of ADC jitter into full-scale swings,
+   which is what makes a channel look like an unstable signal. */
+#define MIN_USABLE_SPAN 200
+
+static void plugin_log(const char *fmt, ...);
+
 static void init_shared_state_defaults(DJIRC2SharedState *st) {
     memset(st, 0, sizeof(*st));
     st->magic = STATE_MAGIC;
@@ -278,9 +286,19 @@ static void load_calib_json_if_present(DJIRC2SharedState *st) {
     for (int i = 0; i < 6; i++) {
         NSDictionary *a = axes[names[i]];
         if ([a isKindOfClass:[NSDictionary class]]) {
-            if (a[@"min"]) st->cal_min[i] = (uint16_t)[a[@"min"] unsignedIntValue];
-            if (a[@"center"]) st->cal_ctr[i] = (uint16_t)[a[@"center"] unsignedIntValue];
-            if (a[@"max"]) st->cal_max[i] = (uint16_t)[a[@"max"] unsignedIntValue];
+            uint16_t mn = a[@"min"]    ? (uint16_t)[a[@"min"] unsignedIntValue]    : st->cal_min[i];
+            uint16_t ct = a[@"center"] ? (uint16_t)[a[@"center"] unsignedIntValue] : st->cal_ctr[i];
+            uint16_t mx = a[@"max"]    ? (uint16_t)[a[@"max"] unsignedIntValue]    : st->cal_max[i];
+            /* Skip ranges that are too narrow to be real, or self-inconsistent. */
+            BOOL sane = (mn < ct && ct < mx) && ((int)(mx - mn) >= MIN_USABLE_SPAN);
+            if (sane) {
+                st->cal_min[i] = mn;
+                st->cal_ctr[i] = ct;
+                st->cal_max[i] = mx;
+            } else {
+                plugin_log("calib: channel %d ignored (span=%d, min=%u ctr=%u max=%u) - keeping default\n",
+                           i, (int)(mx - mn), mn, ct, mx);
+            }
         }
     }
 }
@@ -330,7 +348,7 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                     uint16_t mn = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
                     uint16_t ct = (uint16_t)p[2] | ((uint16_t)p[3] << 8);
                     uint16_t mx = (uint16_t)p[4] | ((uint16_t)p[5] << 8);
-                    if (mn < ct && ct < mx) {
+                    if (mn < ct && ct < mx && (int)(mx - mn) >= MIN_USABLE_SPAN) {
                         st->cal_min[c] = mn;
                         st->cal_ctr[c] = ct;
                         st->cal_max[c] = mx;

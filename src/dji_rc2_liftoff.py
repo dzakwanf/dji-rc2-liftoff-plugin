@@ -101,6 +101,18 @@ CRC16_TABLE = [
 AXIS_NAMES = ["aileron", "elevator", "throttle", "rudder", "wheel_left", "wheel_right"]
 AXIS_OFFSETS = [1, 3, 5, 7, 9, 11]
 
+# A range narrower than this means the channel never actually moved while it was
+# being calibrated, so the numbers are just ADC noise. Scaling by such a range
+# would amplify a couple of LSB into full-scale swings.
+MIN_USABLE_SPAN = 200
+
+# Fallback calibration, used when a channel's measured range is unusable.
+DEFAULT_CAL = (
+    [479, 507, 533, 481, 494, 504],
+    [1642, 1707, 1701, 1612, 1732, 1745],
+    [2864, 2874, 2826, 2789, 2732, 2755],
+)
+
 
 def crc8(data: bytes) -> int:
     c = 0x77
@@ -204,10 +216,14 @@ def load_calib():
                 data = json.load(f)
             axes = data.get("axes", {})
             for i, name in enumerate(AXIS_NAMES):
-                if name in axes:
-                    cal_min[i] = int(axes[name]["min"])
-                    cal_ctr[i] = int(axes[name]["center"])
-                    cal_max[i] = int(axes[name]["max"])
+                if name not in axes:
+                    continue
+                mn = int(axes[name]["min"])
+                ct = int(axes[name]["center"])
+                mx = int(axes[name]["max"])
+                # Ignore narrow/inconsistent ranges; keep the fallback instead.
+                if mn < ct < mx and (mx - mn) >= MIN_USABLE_SPAN:
+                    cal_min[i], cal_ctr[i], cal_max[i] = mn, ct, mx
         except Exception:
             pass
     return cal_min, cal_ctr, cal_max
@@ -224,6 +240,24 @@ DEFAULT_MAPPING = {
 
 
 def save_calib(dev_info, cal_min, cal_ctr, cal_max):
+    # Guard against ranges measured while the channel never actually moved.
+    # A span of a few LSB is pure noise and would make the axis jump wildly.
+    rejected = []
+    for i, name in enumerate(AXIS_NAMES):
+        span = cal_max[i] - cal_min[i]
+        if span < MIN_USABLE_SPAN or not (cal_min[i] < cal_ctr[i] < cal_max[i]):
+            rejected.append((name, span))
+            cal_min[i] = DEFAULT_CAL[0][i]
+            cal_ctr[i] = DEFAULT_CAL[1][i]
+            cal_max[i] = DEFAULT_CAL[2][i]
+
+    if rejected:
+        print("\n⚠️  Channel berikut tidak bergerak cukup jauh saat kalibrasi,")
+        print("    jadi nilainya dibuang dan diganti default:")
+        for name, span in rejected:
+            print(f"      {name:<12} span={span} (minimal {MIN_USABLE_SPAN})")
+        print("    Putar/pindahkan input itu sampai mentok, lalu kalibrasi ulang.")
+
     axes = {}
     for i, name in enumerate(AXIS_NAMES):
         axes[name] = {
