@@ -169,6 +169,7 @@ def split_packets(buf: bytes):
 
 
 def scale_axis(raw: int, lo: int, ctr: int, hi: int, deadzone: float = 0.025) -> float:
+    """Bipolar scaling for self-centering sticks: center -> 0.0."""
     if raw >= ctr:
         span = max(1, hi - ctr)
         frac = (raw - ctr) / span
@@ -183,12 +184,32 @@ def scale_axis(raw: int, lo: int, ctr: int, hi: int, deadzone: float = 0.025) ->
     return max(-1.0, min(1.0, scaled))
 
 
-def bar(val: float, width: int = 20) -> str:
-    half = width // 2
-    pos = int(round((val + 1.0) * 0.5 * width))
+def scale_axis_unipolar(raw: int, lo: int, ctr: int, hi: int) -> float:
+    """Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
+    has (the stick springs back to the middle when released).
+
+    The released/centered position is treated as throttle 0, and pushing up
+    raises it to 1. Pulling down stays at 0 instead of going negative, since
+    Liftoff has no use for negative throttle."""
+    span = hi - ctr
+    if span <= 0:
+        return 0.0
+    frac = (raw - ctr) / span
+    return max(0.0, min(1.0, frac))
+
+
+def bar(val: float, width: int = 20, bipolar: bool = True) -> str:
+    """Render a horizontal indicator. Bipolar values (-1..1) put zero in the
+    middle; unipolar values (0..1) fill from the left."""
+    if bipolar:
+        pos = int(round((val + 1.0) * 0.5 * width))
+        zero = width // 2
+    else:
+        pos = int(round(val * width))
+        zero = 0
     pos = max(0, min(width, pos))
     chars = ["─"] * (width + 1)
-    chars[half] = "┼"
+    chars[zero] = "┼"
     chars[pos] = "█"
     return "".join(chars)
 
@@ -230,12 +251,12 @@ def load_calib():
 
 
 DEFAULT_MAPPING = {
-    "roll":      {"source": 0, "invert": False},
-    "pitch":     {"source": 1, "invert": True},
-    "throttle":  {"source": 2, "invert": False},
-    "yaw":       {"source": 3, "invert": False},
-    "aux_left":  {"source": 4, "invert": False},
-    "aux_right": {"source": 5, "invert": False},
+    "roll":      {"source": 0, "invert": False, "center": True},
+    "pitch":     {"source": 1, "invert": True,  "center": True},
+    "throttle":  {"source": 2, "invert": False, "center": False},
+    "yaw":       {"source": 3, "invert": False, "center": True},
+    "aux_left":  {"source": 4, "invert": False, "center": True},
+    "aux_right": {"source": 5, "invert": False, "center": True},
 }
 
 
@@ -535,7 +556,7 @@ def main():
                 sys.stdout.write(
                     f"\r[Liftoff Active PID {writer_pid}] "
                     f"Lx(Yaw):{bar(rud,12)} {rud:+5.2f} | "
-                    f"Ly(Thr):{bar(thr,12)} {thr:+5.2f} | "
+                    f"Ly(Thr):{bar(thr,12,bipolar=False)} {thr:5.2f} | "
                     f"Rx(Rol):{bar(ail,12)} {ail:+5.2f} | "
                     f"Ry(Pit):{bar(ele,12)} {ele:+5.2f} | "
                     f"WL:{wl:+5.2f} WR:{wr:+5.2f}  "
@@ -609,7 +630,8 @@ def main():
                     raw = vals[1:7]
                     ail = scale_axis(raw[0], cal_min[0], cal_ctr[0], cal_max[0], 0.025)
                     ele = scale_axis(raw[1], cal_min[1], cal_ctr[1], cal_max[1], 0.025)
-                    thr = scale_axis(raw[2], cal_min[2], cal_ctr[2], cal_max[2], 0.025)
+                    # Throttle self-centers on the DJI RC 2: released = 0.0, up = 1.0.
+                    thr = scale_axis_unipolar(raw[2], cal_min[2], cal_ctr[2], cal_max[2])
                     rud = scale_axis(raw[3], cal_min[3], cal_ctr[3], cal_max[3], 0.025)
                     wl  = scale_axis(raw[4], cal_min[4], cal_ctr[4], cal_max[4], 0.030)
                     wr  = scale_axis(raw[5], cal_min[5], cal_ctr[5], cal_max[5], 0.030)
@@ -636,7 +658,7 @@ def main():
                         sys.stdout.write(
                             f"\r[{hz:5.1f} Hz] "
                             f"Lx(Yaw):{bar(rud,10)} {rud:+5.2f} | "
-                            f"Ly(Thr):{bar(thr,10)} {thr:+5.2f} | "
+                            f"Ly(Thr):{bar(thr,10,bipolar=False)} {thr:5.2f} | "
                             f"Rx(Rol):{bar(ail,10)} {ail:+5.2f} | "
                             f"Ry(Pit):{bar(ele,10)} {ele:+5.2f} | "
                             f"WL:{wl:+5.2f} WR:{wr:+5.2f}  "

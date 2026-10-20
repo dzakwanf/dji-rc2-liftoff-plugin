@@ -10,13 +10,13 @@
   "src": 6,
   "payload_len": 13,
   "mapping": {
-    "_comment": "Which raw channel feeds which role, and whether to flip its sign. source = raw[] index (0-5).",
-    "roll":      { "source": 0, "invert": false },
-    "pitch":     { "source": 1, "invert": true  },
-    "throttle":  { "source": 2, "invert": false },
-    "yaw":       { "source": 3, "invert": false },
-    "aux_left":  { "source": 4, "invert": false },
-    "aux_right": { "source": 5, "invert": false }
+    "_comment": "Which raw channel feeds which role, and how it is scaled. source = raw[] index (0-5). center=true means a self-centering stick (bipolar, -1..1). center=false means a self-centering throttle in unipolar mode: released position = 0, pushed up = 1.",
+    "roll":      { "source": 0, "invert": false, "center": true  },
+    "pitch":     { "source": 1, "invert": true,  "center": true  },
+    "throttle":  { "source": 2, "invert": false, "center": false },
+    "yaw":       { "source": 3, "invert": false, "center": true  },
+    "aux_left":  { "source": 4, "invert": false, "center": true  },
+    "aux_right": { "source": 5, "invert": false, "center": true  }
   },
   "axes": {
     "aileron": {

@@ -136,6 +136,8 @@ static double now_sec(void) {
     return (double)tv.tv_sec + (double)tv.tv_usec * 1e-6;
 }
 
+/* Bipolar scaling for self-centering sticks (roll, pitch, yaw).
+   Center maps to 0.0, with a deadzone around it. */
 static float scale_axis(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi, float deadzone) {
     float frac = 0.0f;
     if (raw >= ctr) {
@@ -152,6 +154,24 @@ static float scale_axis(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi, fl
     if (scaled > 1.0f) scaled = 1.0f;
     if (scaled < -1.0f) scaled = -1.0f;
     return scaled;
+}
+
+/* Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
+   has (the stick springs back to the middle when released).
+
+   The released/centered position is treated as throttle 0, and pushing the
+   stick up raises it to 1. Pulling the stick down stays at 0 rather than going
+   negative, because Liftoff has no use for negative throttle.
+
+   result = (raw - center) / (max - center), clamped to 0.0 .. 1.0 */
+static float scale_axis_unipolar(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi) {
+    (void)lo;
+    int span = (int)hi - (int)ctr;
+    if (span <= 0) return 0.0f;
+    float frac = (float)((int)raw - (int)ctr) / (float)span;
+    if (frac > 1.0f) frac = 1.0f;
+    if (frac < 0.0f) frac = 0.0f;
+    return frac;
 }
 
 /* libusb dynamic function pointers */
@@ -217,16 +237,16 @@ typedef enum {
 typedef struct {
     int source;   /* index into the raw[6] array reported by the controller */
     int invert;   /* 1 = flip the sign of the scaled value */
-    int center;   /* 1 = treat as a centered stick (bipolar), 0 = unipolar lever */
+    int center;   /* 1 = self-centering stick (bipolar), 0 = unipolar lever */
 } AxisMapEntry;
 
 static AxisMapEntry g_axisMap[AXIS_COUNT] = {
-    { 0, 0, 1 },  /* ROLL      <- raw[0], not inverted   */
-    { 1, 1, 1 },  /* PITCH     <- raw[1], inverted       */
-    { 2, 0, 1 },  /* THROTTLE  <- raw[2], not inverted   */
-    { 3, 0, 1 },  /* YAW       <- raw[3], not inverted   */
-    { 4, 0, 1 },  /* AUX_L     <- raw[4]                 */
-    { 5, 0, 1 },  /* AUX_R     <- raw[5]                 */
+    { 0, 0, 1 },  /* ROLL      <- raw[0], bipolar          */
+    { 1, 1, 1 },  /* PITCH     <- raw[1], bipolar, inverted */
+    { 2, 0, 0 },  /* THROTTLE  <- raw[2], unipolar: 0..1    */
+    { 3, 0, 1 },  /* YAW       <- raw[3], bipolar          */
+    { 4, 0, 1 },  /* AUX_L     <- raw[4]                   */
+    { 5, 0, 1 },  /* AUX_R     <- raw[5]                   */
 };
 
 static const char *const kAxisRoleNames[AXIS_COUNT] = {
@@ -359,11 +379,25 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                     st->raw[c] = (uint16_t)pay[1 + c * 2] | ((uint16_t)pay[2 + c * 2] << 8);
                 }
                 /* Scale each physical axis through its configured mapping,
-                   then route it to the role it was assigned. */
+                   then route it to the role it was assigned.
+                   Self-centering sticks are scaled bipolar, levers such as the
+                   throttle are scaled unipolar so the released position is 0. */
                 float scaled[6];
                 for (int c = 0; c < 6; c++) {
-                    float deadzone = (c >= 4) ? 0.02f : 0.005f;
-                    scaled[c] = scale_axis(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c], deadzone);
+                    /* Find out whether any role using this channel wants unipolar. */
+                    int unipolar = 0;
+                    for (int role = 0; role < AXIS_COUNT; role++) {
+                        if (g_axisMap[role].source == c && !g_axisMap[role].center) {
+                            unipolar = 1;
+                            break;
+                        }
+                    }
+                    if (unipolar) {
+                        scaled[c] = scale_axis_unipolar(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c]);
+                    } else {
+                        float deadzone = (c >= 4) ? 0.02f : 0.005f;
+                        scaled[c] = scale_axis(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c], deadzone);
+                    }
                 }
                 float role_value[AXIS_COUNT];
                 for (int role = 0; role < AXIS_COUNT; role++) {

@@ -155,6 +155,32 @@ You'll be guided through a two-step wizard:
 
 Results are saved to `src/calib.json`.
 
+## 🕹️ Throttle Behaviour
+
+The DJI RC 2's left stick is **self-centering** — release it and it springs back to the middle. Most FPV radios instead have a friction/ratchet throttle that stays where you leave it, so this one difference trips up nearly everyone.
+
+This project therefore treats the **released (centered) position as throttle 0**:
+
+| Stick position | Throttle sent to Liftoff |
+|:--|:--|
+| Released / centered | `0.00` |
+| Halfway up | `~0.50` |
+| Fully up | `1.00` |
+| Pulled down | `0.00` (clamped, never negative) |
+
+So you push up to climb and let go to idle — no need to hold the stick down while flying, and no surprise spin-up when you release it.
+
+This is controlled by `center` in the `mapping` block of `src/calib.json`:
+
+```json
+"throttle": { "source": 2, "invert": false, "center": false }
+```
+
+- `center: true` → bipolar, for self-centering sticks (`-1..1`, zero in the middle). Used for roll, pitch and yaw.
+- `center: false` → unipolar with the center as zero (`0..1`). Used for throttle.
+
+If you have fitted a ratchet/friction throttle to your radio and want the conventional "bottom = 0, top = 1" feel, flip that channel to the full range by giving it `"center": true` temporarily, or simply recalibrate with the stick held at the bottom.
+
 ## 🗑️ Uninstallation
 
 ```bash
