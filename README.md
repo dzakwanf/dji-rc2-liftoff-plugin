@@ -194,7 +194,7 @@ This project reverse-engineers DJI's DUML protocol and patches game files. Use a
 
 ## 📜 Credits
 
-- DUML protocol & CRC tables: [dji-firmware-tools](https://github.com/firmwire/dji-firmware-tools)
+- DUML protocol & CRC tables: [o-gs/dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools)
 - Input plugin being wrapped: **Rewired** by MadRobot Software (inside Liftoff)
 - Built with [libusb](https://libusb.info/) and a lot of terminal staring
 
