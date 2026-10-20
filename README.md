@@ -1,5 +1,3 @@
-<div align="center">
-
 # 🎮 DJI RC 2 → Liftoff Bridge
 
 **Use your DJI RC 2 remote controller as an FPV controller in *Liftoff: FPV Drone Racing* on macOS.**
@@ -188,7 +186,7 @@ dji-rc2-liftoff-plugin/
 
 ## ⚠️ Disclaimer
 
-This project reverse-engineers DJI's DUML protocol and patches game files. Use at your own own risk. It should not affect your DJI account, your drone, or your warranty — the controller is only ever *read* from — but:
+This project reverse-engineers DJI's DUML protocol and patches game files. Use at your own risk. It should not affect your DJI account, your drone, or your warranty — the controller is only ever *read* from — but:
 
 - Keep backups of your game install
 - Don't fly a real drone while doing this (seriously — the controller is in USB mode)
@@ -203,9 +201,3 @@ This project reverse-engineers DJI's DUML protocol and patches game files. Use a
 ## 📄 License
 
 MIT — see [LICENSE](LICENSE).
-
----
-
-<div align="center">
-  <sub>Made with ❤️ for the FPV community on macOS</sub>
-</div>
