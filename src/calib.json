@@ -56,9 +56,9 @@
     },
     "throttle": {
       "offset": 5,
-      "min": 418,
+      "min": 2923,
       "center": 1685,
-      "max": 2923
+      "max": 418
     },
     "rudder": {
       "offset": 7,
