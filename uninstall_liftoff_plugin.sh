@@ -1,11 +1,14 @@
 #!/bin/bash
 set -e
 
-LIFTOFF_PLUGINS="/Users/fis/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app/Contents/PlugIns"
+# Liftoff install location. Override with:
+#   LIFTOFF_APP="/path/to/Liftoff.app" ./uninstall_liftoff_plugin.sh
+LIFTOFF_APP="${LIFTOFF_APP:-$HOME/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app}"
+LIFTOFF_PLUGINS="$LIFTOFF_APP/Contents/PlugIns"
+LIFTOFF_MANAGED="$LIFTOFF_APP/Contents/Resources/Data/Managed"
+
 ORIG_BUNDLE="$LIFTOFF_PLUGINS/Rewired_MacOS_orig.bundle"
 TARGET_BUNDLE="$LIFTOFF_PLUGINS/Rewired_MacOS.bundle"
-
-LIFTOFF_MANAGED="/Users/fis/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app/Contents/Resources/Data/Managed"
 if [ -f "$LIFTOFF_MANAGED/Rewired_Core_orig.dll" ]; then
     mv "$LIFTOFF_MANAGED/Rewired_Core_orig.dll" "$LIFTOFF_MANAGED/Rewired_Core.dll"
 fi

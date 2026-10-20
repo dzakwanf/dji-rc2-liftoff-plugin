@@ -15,7 +15,8 @@
 
 #define STATE_FILE_PATH "/tmp/dji_rc2_state.bin"
 #ifndef CALIB_FILE_PATH
-#define CALIB_FILE_PATH "/Users/fis/Project/dji-rc2-liftoff-plugin/calib.json"
+/* Overridden at compile time by install_liftoff_plugin.sh via -DCALIB_FILE_PATH=... */
+#define CALIB_FILE_PATH "calib.json"
 #endif
 #define STATE_MAGIC 0x444A4932U /* 'DJI2' */
 #define STATE_VERSION 1U
@@ -431,7 +432,13 @@ static void ensure_orig_loaded(void) {
         g_origBundle = dlopen([origPath UTF8String], RTLD_NOW | RTLD_LOCAL);
     }
     if (!g_origBundle) {
-        g_origBundle = dlopen("/Users/fis/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app/Contents/PlugIns/Rewired_MacOS_orig.bundle", RTLD_NOW | RTLD_LOCAL);
+        /* Fallback: honor LIFTOFF_APP if set, otherwise the default Steam location. */
+        const char *appEnv = getenv("LIFTOFF_APP");
+        NSString *appPath = appEnv && *appEnv
+            ? [NSString stringWithUTF8String:appEnv]
+            : [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app"];
+        NSString *origPath = [appPath stringByAppendingPathComponent:@"Contents/PlugIns/Rewired_MacOS_orig.bundle"];
+        g_origBundle = dlopen([origPath UTF8String], RTLD_NOW | RTLD_LOCAL);
     }
     if (g_origBundle) {
         g_origInit = (RWInitFn)dlsym(g_origBundle, "Initialize");

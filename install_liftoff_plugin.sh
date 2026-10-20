@@ -2,7 +2,13 @@
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-LIFTOFF_PLUGINS="/Users/fis/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app/Contents/PlugIns"
+
+# Liftoff install location. Override with:
+#   LIFTOFF_APP="/path/to/Liftoff.app" ./install_liftoff_plugin.sh
+LIFTOFF_APP="${LIFTOFF_APP:-$HOME/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app}"
+LIFTOFF_PLUGINS="$LIFTOFF_APP/Contents/PlugIns"
+LIFTOFF_MANAGED="$LIFTOFF_APP/Contents/Resources/Data/Managed"
+
 ORIG_BUNDLE="$LIFTOFF_PLUGINS/Rewired_MacOS_orig.bundle"
 TARGET_BUNDLE="$LIFTOFF_PLUGINS/Rewired_MacOS.bundle"
 
@@ -46,7 +52,6 @@ codesign --force --sign - "$ORIG_BUNDLE"
 codesign --force --sign - "$TARGET_BUNDLE"
 
 # 5. Aktifkan useAppleGameController di Rewired_Core.dll & Rewired_OSX.dll
-LIFTOFF_MANAGED="/Users/fis/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app/Contents/Resources/Data/Managed"
 if [ -d "$LIFTOFF_MANAGED" ]; then
     if [ ! -f "$LIFTOFF_MANAGED/Rewired_Core_orig.dll" ]; then
         cp "$LIFTOFF_MANAGED/Rewired_Core.dll" "$LIFTOFF_MANAGED/Rewired_Core_orig.dll"
