@@ -689,23 +689,24 @@ def main():
                 time.sleep(0.016)
                 continue
 
-            # Stale or absent state while Liftoff holds the controller. This is
-            # expected whenever Liftoff was started before the plugin was last
-            # installed: it keeps the old plugin in memory and never writes new
-            # samples, so the values shown would be frozen rather than live.
-            if dev is None and (writer_pid != 0 and writer_pid != my_pid):
+            # Stale state left behind by a Liftoff that has since been closed.
+            # It is worth mentioning once, but it must not block the bridge from
+            # taking the controller over: the stale writer no longer exists, so
+            # holding the USB back only hides live data behind a frozen screen.
+            if dev is None and writer_pid != 0 and writer_pid != my_pid:
                 age = time.time() - ts
-                sys.stdout.write(
-                    f"\r[Data dari PID {writer_pid} basi ({age:.1f}s). "
-                    f"Restart Liftoff agar plugin terbaru termuat.     ")
-                sys.stdout.flush()
-                time.sleep(0.3)
-                continue
+                stale_note = (
+                    f"[State dari PID {writer_pid} basi ({age:.0f}s); "
+                    f"mengambil alih USB]"
+                )
+            else:
+                stale_note = None
 
             if dev is None:
                 dev, info = find_dji_usb()
                 if dev is None:
-                    sys.stdout.write("\r[Menunggu DJI RC 2 di USB...] Pastikan remote menyala & terhubung.   ")
+                    msg = stale_note or "Menunggu DJI RC 2 di USB... Pastikan remote menyala & terhubung."
+                    sys.stdout.write(f"\r[{msg}]   ")
                     sys.stdout.flush()
                     time.sleep(0.5)
                     continue
