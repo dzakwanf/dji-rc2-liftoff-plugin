@@ -189,26 +189,32 @@ def scale_axis(raw: int, lo: int, ctr: int, hi: int, deadzone: float = 0.025) ->
     return max(-1.0, min(1.0, scaled))
 
 
-def scale_axis_unipolar(raw: int, lo: int, ctr: int, hi: int) -> float:
-    """Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
-    has (the stick springs back to the middle when released).
+def scale_axis_lever(raw: int, lo: int, ctr: int, hi: int) -> float:
+    """Lever scaling for a throttle that rests at one end, which is what the
+    DJI RC 2's left stick does: it springs back, and the resting position is
+    the low end of the range.
 
-    Released = 0, pushed up = 1. Pulling the stick down past the released point
-    stays at 0 instead of going negative, since Liftoff has no use for negative
-    throttle.
+    The output spans -1 .. +1 with the resting position at -1 and the stick
+    pushed up at +1. The whole travel from resting to fully up is used, so the
+    throttle keeps the full resolution of the stick, and the axis can actually
+    reach its low end. That last part matters for arming: Liftoff arms on
+    throttle low plus yaw, and a lever that only ever reports 0 .. 1 sits in
+    the middle of the axis, where the arm gesture can never be satisfied.
 
     The calibration carries the direction: "hi" is wherever the channel counts
-    towards as the stick goes up. If the controller reports the channel
+    towards as the stick goes up. If the controller reports that channel
     backwards, the recorded min and max arrive swapped, so "hi" ends up smaller
     than "ctr" and the division below still produces the right sign. That is why
     the ends are swapped in the config rather than the result being negated:
-    negating a value already clamped at 0 would make the whole lower half of the
-    stick read as full throttle."""
+    negating a value already clamped at the low end would make the whole lower
+    half of the stick read as full throttle."""
     span = hi - ctr
     if span == 0:
-        return 0.0
+        return -1.0
     frac = (raw - ctr) / span
-    return max(0.0, min(1.0, frac))
+    frac = max(0.0, min(1.0, frac))
+    # Map the 0 .. 1 travel onto -1 .. +1, resting at the low end.
+    return frac * 2.0 - 1.0
 
 
 def bar(val: float, width: int = 20, bipolar: bool = True) -> str:
@@ -268,8 +274,8 @@ def load_calib():
 
 DEFAULT_MAPPING = {
     "roll":      {"source": 0, "invert": False, "center": True},
-    "pitch":     {"source": 1, "invert": True,  "center": True},
-    "throttle":  {"source": 2, "invert": False, "center": False},
+    "pitch":     {"source": 1, "invert": False, "center": True},
+    "throttle":  {"source": 2, "invert": False, "center": True},
     "yaw":       {"source": 3, "invert": False, "center": True},
     "aux_left":  {"source": 4, "invert": False, "center": True},
     "aux_right": {"source": 5, "invert": False, "center": True},
@@ -293,18 +299,6 @@ def load_mapping():
         except Exception:
             pass
     return mapping
-
-
-def apply_mapping(role_values, mapping):
-    """Flip roles the mapping marks as inverted. Bipolar values negate; a
-    unipolar value has no negative side, so it is reflected within 0..1."""
-    out = []
-    for name, v in role_values:
-        entry = mapping.get(name, {})
-        if entry.get("invert"):
-            v = -v if entry.get("center", True) else (1.0 - v)
-        out.append(v)
-    return out
 
 
 def save_calib(dev_info, cal_min, cal_ctr, cal_max):
@@ -478,14 +472,18 @@ def run_interactive_calibration():
     left_up = ask("Dorong stick KIRI mentok ke ATAS.")[2]
     left_dn = ask("Tarik stick KIRI mentok ke BAWAH.")[2]
 
-    # Throttle must read 0 when released and 1 when pushed up, so "max" has to
-    # be the end the channel reaches with the stick up.
+    # The throttle is scaled bipolar around its resting point, so the two ends
+    # have to be the bottom and the top of the stick: the stick up is the end
+    # that should read positive, the stick down the one that reads negative.
+    # Whether the raw value rises or falls in that direction is the
+    # controller's business, so the ends are placed by which physical end they
+    # came from rather than by their numeric order.
     if left_up < left_dn:
+        # The channel counts upwards as the stick goes down, so the numeric
+        # order of the ends is the other way round.
         cal_min[2], cal_max[2] = cal_max[2], cal_min[2]
-        print("    Throttle: channel dihitung terbalik, ujung ditukar.")
-    else:
-        print("    Throttle: arah sudah benar.")
     cal_ctr[2] = chrono_up if chrono_up else cal_ctr[2]
+    print(f"    Throttle: bawah={cal_min[2]} netral={cal_ctr[2]} atas={cal_max[2]}")
 
     right_l = ask("Dorong stick KANAN mentok ke KIRI (roll).")[0]
     right_r = ask("Dorong stick KANAN mentok ke KANAN (roll).")[0]
@@ -680,7 +678,7 @@ def main():
                 sys.stdout.write(
                     f"\r[Liftoff Active PID {writer_pid}] "
                     f"Lx(Yaw):{bar(rud,12)} {rud:+5.2f} | "
-                    f"Ly(Thr):{bar(thr,12,bipolar=False)} {thr:5.2f} | "
+                    f"Ly(Thr):{bar(thr,12)} {thr:+5.2f} | "
                     f"Rx(Rol):{bar(ail,12)} {ail:+5.2f} | "
                     f"Ry(Pit):{bar(ele,12)} {ele:+5.2f} | "
                     f"WL:{wl:+5.2f} WR:{wr:+5.2f}  "
@@ -767,18 +765,42 @@ def main():
                 if p[9] == 0x06 and p[10] == 0xF5 and len(p) >= 26:
                     vals = struct.unpack("<B6H", p[11:24])
                     raw = vals[1:7]
-                    ail = scale_axis(raw[0], cal_min[0], cal_ctr[0], cal_max[0], 0.025)
-                    ele = scale_axis(raw[1], cal_min[1], cal_ctr[1], cal_max[1], 0.025)
-                    # Throttle self-centers on the DJI RC 2: released = 0.0, up = 1.0.
-                    thr = scale_axis_unipolar(raw[2], cal_min[2], cal_ctr[2], cal_max[2])
-                    rud = scale_axis(raw[3], cal_min[3], cal_ctr[3], cal_max[3], 0.025)
-                    wl  = scale_axis(raw[4], cal_min[4], cal_ctr[4], cal_max[4], 0.030)
-                    wr  = scale_axis(raw[5], cal_min[5], cal_ctr[5], cal_max[5], 0.030)
-                    # Apply the same direction overrides the plugin uses.
-                    ail, ele, thr, rud, wl, wr = apply_mapping(
-                        [("roll", ail), ("pitch", ele), ("throttle", thr),
-                         ("yaw", rud), ("aux_left", wl), ("aux_right", wr)],
-                        mapping)
+                    # Scale the channels the same way the plugin does, then hand
+                    # each role the channel its mapping points at. Doing it this
+                    # way keeps the bridge and the plugin in step: a role that
+                    # is pointed at a different channel, or flagged as a lever,
+                    # behaves the same in both.
+                    lever_channels = {
+                        m.get("source", -1)
+                        for name, m in mapping.items()
+                        if not name.startswith("_") and not m.get("center", True)
+                    }
+                    scaled = []
+                    for c in range(6):
+                        if c in lever_channels:
+                            scaled.append(
+                                scale_axis_lever(raw[c], cal_min[c], cal_ctr[c], cal_max[c])
+                            )
+                        else:
+                            deadzone = 0.02 if c >= 4 else 0.005
+                            scaled.append(
+                                scale_axis(raw[c], cal_min[c], cal_ctr[c], cal_max[c], deadzone)
+                            )
+
+                    def role_value(name, fallback=0.0):
+                        entry = mapping.get(name, {})
+                        src = entry.get("source", -1)
+                        v = scaled[src] if 0 <= src < 6 else fallback
+                        if entry.get("invert"):
+                            v = -v
+                        return v
+
+                    ail = role_value("roll")
+                    ele = role_value("pitch")
+                    thr = role_value("throttle")
+                    rud = role_value("yaw")
+                    wl  = role_value("aux_left")
+                    wr  = role_value("aux_right")
 
                     packed = struct.pack(
                         STATE_STRUCT_FMT,
@@ -802,7 +824,7 @@ def main():
                         sys.stdout.write(
                             f"\r[{hz:5.1f} Hz] "
                             f"Lx(Yaw):{bar(rud,10)} {rud:+5.2f} | "
-                            f"Ly(Thr):{bar(thr,10,bipolar=False)} {thr:5.2f} | "
+                            f"Ly(Thr):{bar(thr,10)} {thr:+5.2f} | "
                             f"Rx(Rol):{bar(ail,10)} {ail:+5.2f} | "
                             f"Ry(Pit):{bar(ele,10)} {ele:+5.2f} | "
                             f"WL:{wl:+5.2f} WR:{wr:+5.2f}  "

@@ -161,28 +161,33 @@ static float scale_axis(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi, fl
     return scaled;
 }
 
-/* Unipolar scaling for a self-centering throttle, which is what the DJI RC 2
-   has (the stick springs back to the middle when released).
+/* Lever scaling for a throttle that rests at one end, which is what the DJI
+   RC 2's left stick does: it springs back, and the resting position is the
+   low end of the range.
 
-   Released = 0, pushed up = 1. Pulling the stick down past the released point
-   stays at 0 rather than going negative, since Liftoff has no use for a
-   negative throttle.
+   The output spans -1 .. +1 with the resting position at -1 and the stick
+   pushed up at +1. The whole travel from resting to fully up is used, so the
+   throttle still has the full resolution of the stick, and the axis can
+   actually reach its low end. That last part matters for arming: Liftoff arms
+   on throttle low plus yaw, and a lever that only ever reports 0 .. 1 sits in
+   the middle of the axis, where the arm gesture can never be satisfied.
 
    The calibration carries the direction: "hi" is wherever the channel counts
    towards as the stick goes up. If the controller reports that channel
    backwards, the recorded min and max simply arrive swapped, so "hi" ends up
    smaller than "ctr" and the division below still produces the right sign.
    That is why the ends are swapped in the config instead of the result being
-   negated afterwards: negating a value already clamped at 0 would make the
-   whole lower half of the stick read as full throttle. */
-static float scale_axis_unipolar(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi) {
+   negated afterwards: negating a value already clamped at the low end would
+   make the whole lower half of the stick read as full throttle. */
+static float scale_axis_lever(uint16_t raw, uint16_t lo, uint16_t ctr, uint16_t hi) {
     (void)lo;
     int span = (int)hi - (int)ctr;
-    if (span == 0) return 0.0f;
+    if (span == 0) return -1.0f;
     float frac = (float)((int)raw - (int)ctr) / (float)span;
     if (frac > 1.0f) frac = 1.0f;
     if (frac < 0.0f) frac = 0.0f;
-    return frac;
+    /* Map the 0 .. 1 travel onto -1 .. +1, resting at the low end. */
+    return frac * 2.0f - 1.0f;
 }
 /* libusb dynamic function pointers */
 typedef struct libusb_context libusb_context;
@@ -256,13 +261,13 @@ typedef enum {
 typedef struct {
     int source;   /* index into the raw[6] array reported by the controller */
     int invert;   /* 1 = flip the sign of the scaled value */
-    int center;   /* 1 = self-centering stick (bipolar), 0 = unipolar lever */
+    int center;   /* 1 = rests in the middle (bipolar), 0 = rests at one end (lever) */
 } AxisMapEntry;
 
 static AxisMapEntry g_axisMap[AXIS_COUNT] = {
     { 0, 0, 1 },  /* ROLL      <- raw[0], bipolar          */
-    { 1, 1, 1 },  /* PITCH     <- raw[1], bipolar, inverted */
-    { 2, 0, 0 },  /* THROTTLE  <- raw[2], unipolar: 0..1    */
+    { 1, 0, 1 },  /* PITCH     <- raw[1], bipolar          */
+    { 2, 0, 1 },  /* THROTTLE  <- raw[2], bipolar          */
     { 3, 0, 1 },  /* YAW       <- raw[3], bipolar          */
     { 4, 0, 1 },  /* AUX_L     <- raw[4]                   */
     { 5, 0, 1 },  /* AUX_R     <- raw[5]                   */
@@ -418,20 +423,21 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                 }
                 /* Scale each physical axis through its configured mapping,
                    then route it to the role it was assigned.
-                   Self-centering sticks are scaled bipolar, levers such as the
-                   throttle are scaled unipolar so the released position is 0. */
+                   Self-centering sticks are scaled bipolar around their centre,
+                   levers such as the throttle are scaled from their resting
+                   position so the axis still reaches its low end. */
                 float scaled[6];
                 for (int c = 0; c < 6; c++) {
-                    /* Find out whether any role using this channel wants unipolar. */
-                    int unipolar = 0;
+                    /* Find out whether any role using this channel is a lever. */
+                    int lever = 0;
                     for (int role = 0; role < AXIS_COUNT; role++) {
                         if (g_axisMap[role].source == c && !g_axisMap[role].center) {
-                            unipolar = 1;
+                            lever = 1;
                             break;
                         }
                     }
-                    if (unipolar) {
-                        scaled[c] = scale_axis_unipolar(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c]);
+                    if (lever) {
+                        scaled[c] = scale_axis_lever(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c]);
                     } else {
                         float deadzone = (c >= 4) ? 0.02f : 0.005f;
                         scaled[c] = scale_axis(st->raw[c], st->cal_min[c], st->cal_ctr[c], st->cal_max[c], deadzone);
@@ -444,11 +450,9 @@ static void parse_duml_buffer(uint8_t *buf, int len, DJIRC2SharedState *st, bool
                     if (g_axisMap[role].invert) {
                         /* Directions are normally fixed by the calibration ends,
                            so this is a deliberate override for a role that still
-                           feels wrong. Bipolar axes negate; a unipolar axis has
-                           no negative side, so negating would give a negative
-                           throttle and is meaningless. For those the value is
-                           reflected within its own range instead. */
-                        v = g_axisMap[role].center ? -v : (1.0f - v);
+                           feels wrong. Every axis is signed now, so inverting
+                           simply flips the sign. */
+                        v = -v;
                     }
                     role_value[role] = v;
                 }

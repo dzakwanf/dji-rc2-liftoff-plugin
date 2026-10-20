@@ -30,7 +30,7 @@
     "throttle": {
       "source": 2,
       "invert": false,
-      "center": false
+      "center": true
     },
     "yaw": {
       "source": 3,
