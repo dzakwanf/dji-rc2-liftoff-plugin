@@ -1,8 +1,8 @@
-# 🎮 DJI RC 2 → Liftoff Bridge
+# 🎮 Fly your DJI RC 2 in Liftoff on macOS
 
-**Use your DJI RC 2 remote controller as an FPV controller in *Liftoff: FPV Drone Racing* on macOS.**
+**If you have a DJI RC 2 sitting around and *Liftoff: FPV Drone Racing* on your Mac, this is the missing piece that lets them finally talk to each other.**
 
-No ADB unlocking. No root/sudo. No extra dongles. Just USB-C and go. 🚁
+No ADB unlocking. No root or `sudo`. No extra dongles to buy. Plug in a USB-C cable, run one command, and go fly. 🚁
 
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon%20%7C%20Intel-blue?style=flat-square&logo=apple)]()
 [![Python](https://img.shields.io/badge/python-3.9+-3776AB?style=flat-square&logo=python&logoColor=white)]()
@@ -63,6 +63,8 @@ No ADB unlocking. No root/sudo. No extra dongles. Just USB-C and go. 🚁
 - Python 3.9+
 
 ## 🚀 Installation
+
+Honestly, the whole thing takes about five minutes.
 
 ### 1. Install system dependencies
 
@@ -186,17 +188,19 @@ dji-rc2-liftoff-plugin/
 
 ## ⚠️ Disclaimer
 
-This project reverse-engineers DJI's DUML protocol and patches game files. Use at your own risk. It should not affect your DJI account, your drone, or your warranty — the controller is only ever *read* from — but:
+This project reverse-engineers DJI's DUML protocol and patches game files, so a little honesty is due: use it at your own risk. It should not affect your DJI account, your drone, or your warranty — your controller is only ever *read* from, never written to — but a few sensible habits go a long way:
 
-- Keep backups of your game install
-- Don't fly a real drone while doing this (seriously — the controller is in USB mode)
-- This is a hobby project, not affiliated with DJI, Steam, or the developers of Liftoff
+- Keep a backup of your game install
+- Don't fly a real drone while the controller is in USB mode (seriously)
+- This is a hobby project, and it's not affiliated with DJI, Steam, or the folks behind Liftoff
 
 ## 📜 Credits
 
+Standing on the shoulders of:
+
 - DUML protocol & CRC tables: [o-gs/dji-firmware-tools](https://github.com/o-gs/dji-firmware-tools)
 - Input plugin being wrapped: **Rewired** by MadRobot Software (inside Liftoff)
-- Built with [libusb](https://libusb.info/) and a lot of terminal staring
+- Built with [libusb](https://libusb.info/) and a lot of late-night terminal staring
 
 ## 📄 License
 
