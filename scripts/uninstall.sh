@@ -2,7 +2,7 @@
 set -e
 
 # Liftoff install location. Override with:
-#   LIFTOFF_APP="/path/to/Liftoff.app" ./uninstall_liftoff_plugin.sh
+#   LIFTOFF_APP="/path/to/Liftoff.app" ./scripts/uninstall.sh
 LIFTOFF_APP="${LIFTOFF_APP:-$HOME/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app}"
 LIFTOFF_PLUGINS="$LIFTOFF_APP/Contents/PlugIns"
 LIFTOFF_MANAGED="$LIFTOFF_APP/Contents/Resources/Data/Managed"

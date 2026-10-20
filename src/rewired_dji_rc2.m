@@ -15,7 +15,7 @@
 
 #define STATE_FILE_PATH "/tmp/dji_rc2_state.bin"
 #ifndef CALIB_FILE_PATH
-/* Overridden at compile time by install_liftoff_plugin.sh via -DCALIB_FILE_PATH=... */
+/* Overridden at compile time by scripts/install.sh via -DCALIB_FILE_PATH=... */
 #define CALIB_FILE_PATH "calib.json"
 #endif
 #define STATE_MAGIC 0x444A4932U /* 'DJI2' */

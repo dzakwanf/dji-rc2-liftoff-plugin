@@ -33,7 +33,7 @@ No ADB unlocking. No root or `sudo`. No extra dongles to buy. Plug in a USB-C ca
 
 ```
 ┌──────────────┐   USB-C (DUML @ ~240 Hz)   ┌───────────────────────┐
-│  DJI RC 2    │ ◄────────────────────────► │  dji_rc2_liftoff.py   │
+│  DJI RC 2    │ ◄────────────────────────► │  src/dji_rc2_liftoff.py│
 │  controller  │                            │  (Python bridge)      │
 └──────────────┘                            └──────────┬────────────┘
                                                        │ shared memory
@@ -49,8 +49,8 @@ No ADB unlocking. No root or `sudo`. No extra dongles to buy. Plug in a USB-C ca
                                             └───────────────────────┘
 ```
 
-1. **The plugin** (`install_liftoff_plugin.sh`) compiles a small Objective-C proxy bundle that wraps the original `Rewired_MacOS.bundle` (Liftoff's controller-input plugin) and re-exports all of its symbols. The proxy is dropped into `Liftoff.app/Contents/PlugIns/`, where it transparently intercepts controller input.
-2. **The bridge** (`dji_rc2_liftoff.py`) talks DUML — DJI's own serial protocol — straight to the controller over USB, decodes stick positions, applies calibration, and publishes them to a shared-memory file (`/tmp/dji_rc2_state.bin`).
+1. **The plugin** (`scripts/install.sh`) compiles a small Objective-C proxy bundle (`src/rewired_dji_rc2.m`) that wraps the original `Rewired_MacOS.bundle` (Liftoff's controller-input plugin) and re-exports all of its symbols. The proxy is dropped into `Liftoff.app/Contents/PlugIns/`, where it transparently intercepts controller input.
+2. **The bridge** (`src/dji_rc2_liftoff.py`) talks DUML — DJI's own serial protocol — straight to the controller over USB, decodes stick positions, applies calibration, and publishes them to a shared-memory file (`/tmp/dji_rc2_state.bin`).
 3. **The plugin reads the shared memory** and feeds the values into Liftoff as a standard game controller. If you launch the plugin *inside* Liftoff first, the Python bridge notices and politely backs off into monitor-only mode — no USB contention, ever.
 
 ## 📋 Requirements
@@ -84,7 +84,7 @@ cd dji-rc2-liftoff-plugin
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install pyusb
+.venv/bin/pip install -r requirements.txt
 ```
 
 ### 4. ✅ Locating Liftoff
@@ -98,15 +98,15 @@ $HOME/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app
 If Liftoff lives somewhere else (an external drive, a different library, a non-standard Steam install), just set `LIFTOFF_APP` when running the scripts:
 
 ```bash
-LIFTOFF_APP="/Volumes/Games/Steam/steamapps/common/Liftoff/Liftoff.app" ./install_liftoff_plugin.sh
+LIFTOFF_APP="/Volumes/Games/Steam/steamapps/common/Liftoff/Liftoff.app" ./scripts/install.sh
 ```
 
-The same variable works for `uninstall_liftoff_plugin.sh`.
+The same variable works for `scripts/uninstall.sh`.
 
 ### 5. Install the plugin into Liftoff
 
 ```bash
-./install_liftoff_plugin.sh
+./scripts/install.sh
 ```
 
 This will:
@@ -123,7 +123,7 @@ This will:
 3. Run the bridge in a terminal:
 
 ```bash
-./run.sh
+./scripts/run.sh
 ```
 
 You should see live stick telemetry streaming:
@@ -145,7 +145,7 @@ If Liftoff is already reading USB itself, the bridge automatically flips to pass
 The bridge already fetches the factory stick calibration from the controller's MCU automatically. If you want to (re)calibrate manually — e.g. after a stick-center drift — run:
 
 ```bash
-./run.sh --calibrate
+./scripts/run.sh --calibrate
 ```
 
 You'll be guided through a two-step wizard:
@@ -153,12 +153,12 @@ You'll be guided through a two-step wizard:
 1. **Step 1 (2 s):** release both sticks and wheels to their center position
 2. **Step 2 (8 s):** rotate both sticks and both wheels to their extremes in every direction
 
-Results are saved to `calib.json` next to the script.
+Results are saved to `src/calib.json`.
 
 ## 🗑️ Uninstallation
 
 ```bash
-./uninstall_liftoff_plugin.sh
+./scripts/uninstall.sh
 ```
 
 Restores the original `Rewired_MacOS.bundle` from backup and reverts the `Rewired_Core.dll` patch. Clean and complete.
@@ -171,22 +171,27 @@ Restores the original `Rewired_MacOS.bundle` from backup and reverts the `Rewire
 | `[Waiting for DJI RC 2 on USB...]` | Make sure the controller is **powered on** and connected via a **data-capable** USB-C cable (some cables are charge-only). Check with `system_profiler SPUSBDataType`. |
 | `LIBUSB_ERROR_ACCESS` | Another process (or Liftoff itself) is claiming the USB interface. Unplug/replug the controller, or quit Liftoff and retry. |
 | `LIBUSB_ERROR_NOT_FOUND` | `libusb` isn't installed or isn't in the expected Homebrew path. Run `brew install libusb`. |
-| Sticks drift / don't reach ±1.00 | Recalibrate: `./run.sh --calibrate` |
+| Sticks drift / don't reach ±1.00 | Recalibrate: `./scripts/run.sh --calibrate` |
 | Plugin not loaded by Liftoff | Verify code signatures: `codesign --verify --verbose=2` on the bundle. On some macOS versions you may need to allow it under **System Settings → Privacy & Security**. |
-| Steam verifies game files & wipes the plugin | Just re-run `./install_liftoff_plugin.sh` — it's idempotent. |
+| Steam verifies game files & wipes the plugin | Just re-run `./scripts/install.sh` — it's idempotent. |
 
 ## 🗂️ Project Structure
 
 ```
 dji-rc2-liftoff-plugin/
-├── dji_rc2_liftoff.py            # Python bridge: USB/DUML polling + shared-memory publisher + live monitor
-├── src/
-│   └── rewired_dji_rc2.m         # Objective-C proxy plugin injected into Liftoff
-├── install_liftoff_plugin.sh     # One-shot installer (backup → compile → install → patch → sign)
-├── uninstall_liftoff_plugin.sh   # Full restore from backup
-├── run.sh                        # Launches the bridge inside the project venv
-├── calib.json                    # Stick calibration data (auto-generated)
-└── build/                        # Local build artifacts (git-ignored, regenerated by the installer)
+├── README.md
+├── LICENSE
+├── requirements.txt              # Python dependencies (pyusb)
+├── src/                          # All source code
+│   ├── dji_rc2_liftoff.py        # Python bridge: USB/DUML polling + shared memory + live monitor
+│   ├── rewired_dji_rc2.m         # Objective-C proxy plugin injected into Liftoff
+│   └── calib.json                # Stick calibration data (auto-generated)
+├── scripts/                      # Entry points
+│   ├── install.sh                # One-shot installer (backup → compile → install → patch → sign)
+│   ├── uninstall.sh              # Full restore from backup
+│   └── run.sh                    # Launches the bridge
+├── build/                        # Local build artifacts (git-ignored, regenerated by install.sh)
+└── .venv/                        # Python virtualenv (git-ignored)
 ```
 
 ## ⚠️ Disclaimer

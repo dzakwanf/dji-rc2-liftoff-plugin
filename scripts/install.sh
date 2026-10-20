@@ -2,9 +2,10 @@
 set -e
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 
 # Liftoff install location. Override with:
-#   LIFTOFF_APP="/path/to/Liftoff.app" ./install_liftoff_plugin.sh
+#   LIFTOFF_APP="/path/to/Liftoff.app" ./scripts/install.sh
 LIFTOFF_APP="${LIFTOFF_APP:-$HOME/Library/Application Support/Steam/steamapps/common/Liftoff/Liftoff.app}"
 LIFTOFF_PLUGINS="$LIFTOFF_APP/Contents/PlugIns"
 LIFTOFF_MANAGED="$LIFTOFF_APP/Contents/Resources/Data/Managed"
@@ -17,7 +18,7 @@ if [ ! -d "$LIFTOFF_PLUGINS" ]; then
     exit 1
 fi
 
-mkdir -p "$HERE/build"
+mkdir -p "$ROOT/build"
 
 # 1. Backup original Rewired_MacOS.bundle jika belum ada backup
 if [ ! -f "$ORIG_BUNDLE" ]; then
@@ -26,28 +27,28 @@ if [ ! -f "$ORIG_BUNDLE" ]; then
 fi
 
 # 2. Set install_name pada Rewired_MacOS_orig.bundle & daftar simbol re-export
-cp "$ORIG_BUNDLE" "$HERE/build/Rewired_MacOS_orig.bundle"
-install_name_tool -id "@loader_path/Rewired_MacOS_orig.bundle" "$HERE/build/Rewired_MacOS_orig.bundle" 2>/dev/null || true
-codesign --force --sign - "$HERE/build/Rewired_MacOS_orig.bundle"
+cp "$ORIG_BUNDLE" "$ROOT/build/Rewired_MacOS_orig.bundle"
+install_name_tool -id "@loader_path/Rewired_MacOS_orig.bundle" "$ROOT/build/Rewired_MacOS_orig.bundle" 2>/dev/null || true
+codesign --force --sign - "$ROOT/build/Rewired_MacOS_orig.bundle"
 
-nm -gU "$HERE/build/Rewired_MacOS_orig.bundle" | awk '{print $3}' | grep -E '^_RW|^_SetLogCallback' > "$HERE/build/reexport.txt"
+nm -gU "$ROOT/build/Rewired_MacOS_orig.bundle" | awk '{print $3}' | grep -E '^_RW|^_SetLogCallback' > "$ROOT/build/reexport.txt"
 
 # 3. Compile Universal (arm64 + x86_64) Rewired_MacOS.bundle proxy
 echo "Mengompilasi plugin Universal (arm64 + x86_64) DJI RC 2 untuk Liftoff..."
 clang -dynamiclib -arch arm64 -arch x86_64 -O2 \
-  -DCALIB_FILE_PATH="\"$HERE/calib.json\"" \
+  -DCALIB_FILE_PATH="\"$ROOT/src/calib.json\"" \
   -framework Foundation -framework GameController \
-  "$HERE/src/rewired_dji_rc2.m" \
-  "$HERE/build/Rewired_MacOS_orig.bundle" \
-  -Wl,-reexported_symbols_list,"$HERE/build/reexport.txt" \
+  "$ROOT/src/rewired_dji_rc2.m" \
+  "$ROOT/build/Rewired_MacOS_orig.bundle" \
+  -Wl,-reexported_symbols_list,"$ROOT/build/reexport.txt" \
   -install_name "@rpath/Rewired_MacOS.bundle" \
-  -o "$HERE/build/Rewired_MacOS.bundle"
+  -o "$ROOT/build/Rewired_MacOS.bundle"
 
-codesign --force --sign - "$HERE/build/Rewired_MacOS.bundle"
+codesign --force --sign - "$ROOT/build/Rewired_MacOS.bundle"
 
 # 4. Pasang ke Liftoff.app/Contents/PlugIns/
-cp "$HERE/build/Rewired_MacOS_orig.bundle" "$ORIG_BUNDLE"
-cp "$HERE/build/Rewired_MacOS.bundle" "$TARGET_BUNDLE"
+cp "$ROOT/build/Rewired_MacOS_orig.bundle" "$ORIG_BUNDLE"
+cp "$ROOT/build/Rewired_MacOS.bundle" "$TARGET_BUNDLE"
 codesign --force --sign - "$ORIG_BUNDLE"
 codesign --force --sign - "$TARGET_BUNDLE"
 
